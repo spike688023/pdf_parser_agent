@@ -23,7 +23,7 @@
 ### 1. 克隆專案
 
 ```bash
-git clone <your-repository-url>
+git clone git@github.com:spike688023/pdf_parser_agent.git
 cd "PDF agent"
 ```
 
