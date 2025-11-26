@@ -61,7 +61,6 @@ with st.sidebar:
                         st.sidebar.markdown(f"**Tags:** {tags}")
                         st.session_state.current_pdf_tags = tags
                 except Exception as e:
-                except Exception as e:
                     st.error(f"Error processing PDF: {e}")
         
         if st.button("Highlight Key Points"):
