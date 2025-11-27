@@ -5,10 +5,13 @@ import tempfile
 import aiohttp
 from dotenv import load_dotenv
 from src.agent import create_qa_agent
-from src.rag_engine import ingest_pdf_tool, highlight_document_tool
+from src.rag_engine import ingest_pdf_tool, highlight_document_tool, set_session_vector_store
 from src.pdf_parser import parse_pdf_file
-from src.database import _vector_store
+from src.database import _vector_store, VectorStore
+from src.session_cleanup import SessionCleanup, update_session_activity
 from google.adk.sessions import DatabaseSessionService
+import threading
+import atexit
 from google.adk.runners import Runner
 from google.genai import types
 import logging
@@ -45,10 +48,32 @@ if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 if "documents" not in st.session_state:
     st.session_state.documents = []
+if "session_vector_store" not in st.session_state:
+    # Create session-specific vector store
+    st.session_state.session_vector_store = VectorStore(session_id=st.session_state.session_id)
 
-# Load documents from database
+# Set the session vector store for RAG tools to use
+set_session_vector_store(st.session_state.session_vector_store)
+
+# Update session activity on every page load
+update_session_activity(st.session_state.session_id)
+
+# Start cleanup thread (runs once globally)
+if "cleanup_thread_started" not in st.session_state:
+    cleanup = SessionCleanup(expiry_hours=6)
+    def run_cleanup_loop():
+        import time
+        while True:
+            time.sleep(3600)  # Run every hour
+            cleanup.cleanup_expired_sessions()
+    
+    thread = threading.Thread(target=run_cleanup_loop, daemon=True)
+    thread.start()
+    st.session_state.cleanup_thread_started = True
+
+# Load documents from session-specific database
 def load_documents():
-    st.session_state.documents = _vector_store.list_all_documents()
+    st.session_state.documents = st.session_state.session_vector_store.list_all_documents()
 
 # Initial load
 if not st.session_state.documents:
@@ -70,11 +95,15 @@ with st.sidebar:
     if uploaded_file:
         if st.button("Process PDF", type="primary"):
             with st.spinner("Processing PDF..."):
-                # Save to uploads directory with original filename
-                if not os.path.exists("uploads"):
-                    os.makedirs("uploads")
+                # Update session activity
+                update_session_activity(st.session_state.session_id)
                 
-                file_path = os.path.join("uploads", uploaded_file.name)
+                # Save to session-specific uploads directory
+                session_upload_dir = os.path.join("uploads", st.session_state.session_id)
+                if not os.path.exists(session_upload_dir):
+                    os.makedirs(session_upload_dir)
+                
+                file_path = os.path.join(session_upload_dir, uploaded_file.name)
                 with open(file_path, "wb") as f:
                     f.write(uploaded_file.getvalue())
                 
@@ -104,7 +133,8 @@ with st.sidebar:
                 st.caption(f"Uploaded: {doc['upload_time'][:19]}")
                 st.caption(f"Chunks: {doc['chunk_count']}")
                 if st.button("🗑️ Delete", key=f"del_{doc['document_id']}"):
-                    _vector_store.delete_document(doc['document_id'])
+                    update_session_activity(st.session_state.session_id)
+                    st.session_state.session_vector_store.delete_document(doc['document_id'])
                     load_documents()
                     st.rerun()
 
@@ -162,6 +192,9 @@ if st.session_state.documents:
                 st.markdown(message["content"])
         
         if prompt := st.chat_input("Ask a question about your documents"):
+            # Update session activity on user interaction
+            update_session_activity(st.session_state.session_id)
+            
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)

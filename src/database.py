@@ -18,11 +18,19 @@ retry_config = types.HttpRetryOptions(
 )
 
 class VectorStore:
-    def __init__(self, storage_dir: str = "storage", dimension: int = 384):
+    def __init__(self, storage_dir: str = "storage", dimension: int = 384, session_id: str = None):
         self.storage_dir = storage_dir
         self.dimension = dimension
-        self.db_path = os.path.join(storage_dir, "metadata.db")
-        self.index_path = os.path.join(storage_dir, "faiss.index")
+        self.session_id = session_id
+        
+        # Use session-specific database if session_id is provided
+        if session_id:
+            self.db_path = os.path.join(storage_dir, f"{session_id}_metadata.db")
+            self.index_path = os.path.join(storage_dir, f"{session_id}_faiss.index")
+        else:
+            # Fallback to global database (for backward compatibility)
+            self.db_path = os.path.join(storage_dir, "metadata.db")
+            self.index_path = os.path.join(storage_dir, "faiss.index")
         
         if not os.path.exists(storage_dir):
             os.makedirs(storage_dir)

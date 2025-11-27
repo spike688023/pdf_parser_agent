@@ -13,6 +13,15 @@ import google.generativeai as genai
 # Configuration
 from google.genai import types
 
+# Global variable to store current session's vector store
+# This will be set by app.py before calling any tools
+_current_session_vector_store = None
+
+def set_session_vector_store(vector_store):
+    """Set the vector store for the current session."""
+    global _current_session_vector_store
+    _current_session_vector_store = vector_store
+
 # Configuration
 retry_config = types.HttpRetryOptions(
     attempts=3,
@@ -115,14 +124,14 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
         print(f"Ingesting text from: {file_path}")
         result = ingest_pages_tool(pages, source=file_path, tags=tags)
         
-        # 4. Save document metadata to database
+        # Save document metadata to database
         import hashlib
         document_id = hashlib.md5(file_path.encode()).hexdigest()[:16]
         document_name = original_filename if original_filename else os.path.basename(file_path)
         chunk_count = len(_chunk_pages(pages, file_path, tags=tags))
         
-        from .database import _vector_store
-        _vector_store.save_document_metadata(
+        if _current_session_vector_store:
+            _current_session_vector_store.save_document_metadata(
             document_id=document_id,
             document_name=document_name,
             file_path=file_path,
@@ -154,17 +163,14 @@ def retrieve_context_tool(query: str) -> str:
         context_str = ""
         seen_docs = set()
         
-        # Add highlights for relevant documents
-        from .database import _vector_store
-        
         for i, chunk in enumerate(results):
             page_num = chunk.get('page_number', 'Unknown')
             doc_name = chunk.get('document_name', 'Unknown')
             doc_id = chunk.get('document_id')
             
             # Add document highlights if not already added
-            if doc_id and doc_id not in seen_docs:
-                doc_meta = _vector_store.get_document_metadata(doc_id)
+            if doc_id and doc_id not in seen_docs and _current_session_vector_store:
+                doc_meta = _current_session_vector_store.get_document_metadata(doc_id)
                 if doc_meta and doc_meta.get('highlights'):
                     context_str += f"[Document Summary & Highlights for {doc_name}]:\n{doc_meta['highlights']}\n\n"
                 seen_docs.add(doc_id)
@@ -190,8 +196,10 @@ def list_documents_tool(document_names: Optional[List[str]] = None) -> str:
         Formatted string with document information including highlights.
     """
     try:
-        from .database import _vector_store
-        all_docs = _vector_store.list_all_documents()
+        if not _current_session_vector_store:
+            return "Error: Session not initialized"
+            
+        all_docs = _current_session_vector_store.list_all_documents()
         
         if not all_docs:
             return "No documents found in the library."
@@ -485,19 +493,19 @@ async def highlight_document_tool(file_path: str, pages: Optional[List[str]] = N
             # Save highlights to database metadata
             import hashlib
             document_id = hashlib.md5(file_path.encode()).hexdigest()[:16]
-            from .database import _vector_store
             
-            # Get existing metadata
-            existing = _vector_store.get_document_metadata(document_id)
-            if existing:
-                _vector_store.save_document_metadata(
-                    document_id=document_id,
-                    document_name=existing["document_name"],
-                    file_path=file_path,
-                    tags=existing.get("tags", ""),
-                    highlights=highlights_text,
-                    chunk_count=existing.get("chunk_count", 0)
-                )
+            # Get existing metadata and save highlights
+            if _current_session_vector_store:
+                existing = _current_session_vector_store.get_document_metadata(document_id)
+                if existing:
+                    _current_session_vector_store.save_document_metadata(
+                        document_id=document_id,
+                        document_name=existing["document_name"],
+                        file_path=file_path,
+                        tags=existing.get("tags", ""),
+                        highlights=highlights_text,
+                        chunk_count=existing.get("chunk_count", 0)
+                    )
             
             return highlights_text
         except Exception as api_error:
