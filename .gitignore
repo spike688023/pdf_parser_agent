@@ -9,6 +9,7 @@ develop-eggs/
 dist/
 downloads/
 eggs/
+logs/
 .eggs/
 lib/
 lib64/
@@ -41,3 +42,9 @@ venv.bak/
 storage/
 *.ipynb
 *.pdf
+
+# Test and Backup Files
+app_backup.py
+app_new.py
+inspect_adk.py
+test_adk_gemini.py

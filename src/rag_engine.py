@@ -1,12 +1,14 @@
 import numpy as np
 import os
-from typing import List, Dict, Any
+import asyncio
+from typing import List, Dict, Any, Optional
 from google.adk.agents import Agent
 from google.adk.models.google_llm import Gemini
 from google.adk.tools import FunctionTool
 from .database import add_to_database, search_database
 from src.pdf_parser import parser_agent, parse_pdf_file
 from sentence_transformers import SentenceTransformer
+import google.generativeai as genai
 
 # Configuration
 from google.genai import types
@@ -75,13 +77,17 @@ def ingest_text_tool(text: str, source: str) -> str:
         return f"Error generating embeddings: {e}"
 
 # Tool for QAAgent to ingest a PDF file
-async def ingest_pdf_tool(file_path: str, pages: List[tuple] = None) -> str:
+async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, original_filename: Optional[str] = None) -> str:
+    # Handle path resolution
+    if not os.path.exists(file_path) and os.path.exists(os.path.join("uploads", file_path)):
+        file_path = os.path.join("uploads", file_path)
     """
     Ingests a PDF file into the knowledge base.
     
     Args:
         file_path: The absolute path to the PDF file.
         pages: Optional pre-parsed pages to avoid re-parsing.
+        original_filename: Optional original filename (for display purposes).
         
     Returns:
         A message indicating success or failure.
@@ -109,6 +115,22 @@ async def ingest_pdf_tool(file_path: str, pages: List[tuple] = None) -> str:
         print(f"Ingesting text from: {file_path}")
         result = ingest_pages_tool(pages, source=file_path, tags=tags)
         
+        # 4. Save document metadata to database
+        import hashlib
+        document_id = hashlib.md5(file_path.encode()).hexdigest()[:16]
+        document_name = original_filename if original_filename else os.path.basename(file_path)
+        chunk_count = len(_chunk_pages(pages, file_path, tags=tags))
+        
+        from .database import _vector_store
+        _vector_store.save_document_metadata(
+            document_id=document_id,
+            document_name=document_name,
+            file_path=file_path,
+            tags=tags,
+            highlights="",  # Will be generated separately
+            chunk_count=chunk_count
+        )
+        
         return f"Successfully ingested PDF: {file_path}. Tags: {tags}. {result}"
     except Exception as e:
         return f"Error ingesting PDF: {str(e)}"
@@ -130,15 +152,72 @@ def retrieve_context_tool(query: str) -> str:
             return "No relevant context found."
         
         context_str = ""
+        seen_docs = set()
+        
+        # Add highlights for relevant documents
+        from .database import _vector_store
+        
         for i, chunk in enumerate(results):
             page_num = chunk.get('page_number', 'Unknown')
             doc_name = chunk.get('document_name', 'Unknown')
+            doc_id = chunk.get('document_id')
+            
+            # Add document highlights if not already added
+            if doc_id and doc_id not in seen_docs:
+                doc_meta = _vector_store.get_document_metadata(doc_id)
+                if doc_meta and doc_meta.get('highlights'):
+                    context_str += f"[Document Summary & Highlights for {doc_name}]:\n{doc_meta['highlights']}\n\n"
+                seen_docs.add(doc_id)
+            
             context_str += f"[Source {i+1} - {doc_name}, Page {page_num}]:\n{chunk['text']}\n\n"
         return context_str
             
     except Exception as e:
         print(f"Error during retrieval: {e}")
         return f"Error retrieving context: {e}"
+
+# Tool to list all documents and their summaries
+def list_documents_tool(document_names: Optional[List[str]] = None) -> str:
+    """
+    Lists documents in the knowledge base with their summaries/highlights.
+    
+    Args:
+        document_names: Optional list of specific document names to retrieve.
+                       If None or empty, returns all documents.
+                       Example: ["Agent Quality.pdf", "Context Engineering.pdf"]
+    
+    Returns:
+        Formatted string with document information including highlights.
+    """
+    try:
+        from .database import _vector_store
+        all_docs = _vector_store.list_all_documents()
+        
+        if not all_docs:
+            return "No documents found in the library."
+        
+        # Filter documents if specific names are requested
+        if document_names:
+            docs = [doc for doc in all_docs if doc['document_name'] in document_names]
+            if not docs:
+                return f"None of the requested documents were found. Available documents: {', '.join([d['document_name'] for d in all_docs])}"
+        else:
+            docs = all_docs
+            
+        result = f"Found {len(docs)} document(s):\n\n"
+        for doc in docs:
+            result += f"📄 **{doc['document_name']}**\n"
+            if doc.get('tags'):
+                result += f"🏷️ Tags: {doc['tags']}\n"
+            if doc.get('highlights'):
+                result += f"✨ Highlights:\n{doc['highlights']}\n"
+            else:
+                result += "✨ Highlights: Not generated yet.\n"
+            result += "\n" + "="*50 + "\n\n"
+            
+        return result
+    except Exception as e:
+        return f"Error listing documents: {e}"
 
 def _chunk_pages(pages: List[tuple], source: str, tags: str = "", chunk_size: int = 1000, chunk_overlap: int = 200) -> List[Dict[str, Any]]:
     """
@@ -227,7 +306,10 @@ retriever_agent = Agent(
 )
 
 # Tool for Auto-Tagging
-async def tag_document_tool(file_path: str, pages: List[tuple] = None) -> str:
+async def tag_document_tool(file_path: str, pages: Optional[List[str]] = None) -> str:
+    # Handle path resolution
+    if not os.path.exists(file_path) and os.path.exists(os.path.join("uploads", file_path)):
+        file_path = os.path.join("uploads", file_path)
     """
     Generates tags for a PDF file using LLM.
     
@@ -255,7 +337,11 @@ async def tag_document_tool(file_path: str, pages: List[tuple] = None) -> str:
             text_sample = text_sample[:10000]
             
         # 3. Use LLM to generate tags
-        model = Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config)
+        if not os.getenv("GOOGLE_API_KEY"):
+            return "Error: GOOGLE_API_KEY not found."
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        model = genai.GenerativeModel('gemini-2.0-flash-lite')
+        
         prompt = f"""
         Analyze the following document text and generate 3-5 relevant tags.
         Tags should be concise keywords representing the document's topic, type, or domain.
@@ -266,15 +352,35 @@ async def tag_document_tool(file_path: str, pages: List[tuple] = None) -> str:
         {text_sample}
         """
         
-        response = await model.generate_content(prompt)
-        return response.text.strip()
+        # Run in thread to avoid blocking event loop
+        try:
+            response = await asyncio.to_thread(model.generate_content, prompt)
+            return response.text.strip()
+        except Exception as api_error:
+            error_str = str(api_error)
+            # Check if it's a quota error (429)
+            if "429" in error_str or "quota" in error_str.lower():
+                # Try to extract retry delay from error message
+                import re
+                retry_match = re.search(r'retry in (\d+(?:\.\d+)?)', error_str, re.IGNORECASE)
+                if retry_match:
+                    retry_seconds = int(float(retry_match.group(1)))
+                    return f"⏳ API quota exceeded. Please wait {retry_seconds} seconds and try again."
+                else:
+                    return "⏳ API quota exceeded. Please wait a moment and try again."
+            else:
+                # Other errors
+                raise
         
     except Exception as e:
         print(f"Error generating tags: {e}")
         return "Unknown"
 
 # Tool for Auto-Highlighting
-async def highlight_document_tool(file_path: str, pages: List[tuple] = None) -> str:
+async def highlight_document_tool(file_path: str, pages: Optional[List[str]] = None) -> str:
+    # Handle path resolution
+    if not os.path.exists(file_path) and os.path.exists(os.path.join("uploads", file_path)):
+        file_path = os.path.join("uploads", file_path)
     """
     Extracts key points and highlights from a PDF file using Map-Reduce for large docs.
     
@@ -299,7 +405,10 @@ async def highlight_document_tool(file_path: str, pages: List[tuple] = None) -> 
         if not pages:
             return "No text extracted from PDF."
             
-        model = Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config)
+        if not os.getenv("GOOGLE_API_KEY"):
+            return "Error: GOOGLE_API_KEY not found."
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        model = genai.GenerativeModel('gemini-2.0-flash-lite')
         
         # 2. Map Phase: Summarize chunks
         # Group pages into chunks of roughly 20k chars or 10 pages
@@ -331,8 +440,21 @@ async def highlight_document_tool(file_path: str, pages: List[tuple] = None) -> 
             Text Segment:
             {chunk}
             """
-            response = await model.generate_content(prompt)
-            partial_summaries.append(response.text)
+            try:
+                response = await asyncio.to_thread(model.generate_content, prompt)
+                partial_summaries.append(response.text)
+            except Exception as api_error:
+                error_str = str(api_error)
+                if "429" in error_str or "quota" in error_str.lower():
+                    import re
+                    retry_match = re.search(r'retry in (\d+(?:\.\d+)?)', error_str, re.IGNORECASE)
+                    if retry_match:
+                        retry_seconds = int(float(retry_match.group(1)))
+                        return f"⏳ API quota exceeded while processing chunk {i+1}. Please wait {retry_seconds} seconds and try again."
+                    else:
+                        return "⏳ API quota exceeded. Please wait a moment and try again."
+                else:
+                    raise
             
         # 3. Reduce Phase: Combine summaries
         combined_summary = "\n\n".join(partial_summaries)
@@ -356,8 +478,40 @@ async def highlight_document_tool(file_path: str, pages: List[tuple] = None) -> 
         ...
         """
         
-        final_response = await model.generate_content(final_prompt)
-        return final_response.text
+        try:
+            final_response = await asyncio.to_thread(model.generate_content, final_prompt)
+            highlights_text = final_response.text
+            
+            # Save highlights to database metadata
+            import hashlib
+            document_id = hashlib.md5(file_path.encode()).hexdigest()[:16]
+            from .database import _vector_store
+            
+            # Get existing metadata
+            existing = _vector_store.get_document_metadata(document_id)
+            if existing:
+                _vector_store.save_document_metadata(
+                    document_id=document_id,
+                    document_name=existing["document_name"],
+                    file_path=file_path,
+                    tags=existing.get("tags", ""),
+                    highlights=highlights_text,
+                    chunk_count=existing.get("chunk_count", 0)
+                )
+            
+            return highlights_text
+        except Exception as api_error:
+            error_str = str(api_error)
+            if "429" in error_str or "quota" in error_str.lower():
+                import re
+                retry_match = re.search(r'retry in (\d+(?:\.\d+)?)', error_str, re.IGNORECASE)
+                if retry_match:
+                    retry_seconds = int(float(retry_match.group(1)))
+                    return f"⏳ API quota exceeded during final synthesis. Please wait {retry_seconds} seconds and try again."
+                else:
+                    return "⏳ API quota exceeded. Please wait a moment and try again."
+            else:
+                raise
         
     except Exception as e:
         return f"Error generating highlights: {str(e)}"
