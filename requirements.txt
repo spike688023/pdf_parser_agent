@@ -6,3 +6,6 @@ python-dotenv
 pdfplumber
 streamlit
 sentence-transformers
+aiohttp
+google-genai
+google-adk
