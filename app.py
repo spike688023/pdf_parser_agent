@@ -195,18 +195,14 @@ if st.session_state.documents:
             # Update session activity on user interaction
             update_session_activity(st.session_state.session_id)
             
+            # Add user message to history
             st.session_state.messages.append({"role": "user", "content": prompt})
-        
-        # Display chat history
-        for message in st.session_state.messages[:-1] if prompt else st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
-        
-        # Handle new user message
-        if prompt:
+            
+            # Display the new user message
             with st.chat_message("user"):
                 st.markdown(prompt)
         
+            # Generate and display assistant response
             with st.chat_message("assistant"):
                 # Generator for streaming response
                 async def run_agent_stream():
@@ -265,6 +261,26 @@ if st.session_state.documents:
                 except Exception as e:
                     logging.error(f"Error during agent execution: {e}", exc_info=True)
                     st.error(f"An error occurred: {e}")
+        
+        
+        # Display chat history in reverse order (newest first)
+        # Logic: Iterate reversed, buffer Assistant message, display when User message is encountered
+        # This ensures User-Assistant pairs are kept together and displayed in correct internal order (User -> Assistant)
+        
+        history_to_display = st.session_state.messages[:-2] if prompt else st.session_state.messages
+        
+        pending_assistant_message = None
+        for message in reversed(history_to_display):
+            if message["role"] == "assistant":
+                pending_assistant_message = message
+            elif message["role"] == "user":
+                with st.chat_message("user"):
+                    st.markdown(message["content"])
+                if pending_assistant_message:
+                    with st.chat_message("assistant"):
+                        st.markdown(pending_assistant_message["content"])
+                    pending_assistant_message = None
+                
 else:
     # No documents uploaded yet
     st.info("👈 Upload your first PDF to get started!")
