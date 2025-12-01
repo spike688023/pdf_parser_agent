@@ -171,6 +171,10 @@ if st.session_state.documents:
                     # Generate highlights button
                     if st.button("Generate Highlights", key=f"gen_hl_{doc['document_id']}"):
                         with st.spinner("Generating highlights..."):
+                            # Ensure session vector store is set for the tool to save highlights
+                            set_session_vector_store(st.session_state.session_vector_store)
+                            update_session_activity(st.session_state.session_id)
+                            
                             async def gen_highlights():
                                 return await highlight_document_tool(doc['file_path'])
                             
@@ -186,16 +190,20 @@ if st.session_state.documents:
     with col_chat:
         st.subheader("💬 Chat with Your Documents")
         
-        # Chat Interface
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
-        
+        # Chat input at the top for easy access
         if prompt := st.chat_input("Ask a question about your documents"):
             # Update session activity on user interaction
             update_session_activity(st.session_state.session_id)
             
             st.session_state.messages.append({"role": "user", "content": prompt})
+        
+        # Display chat history
+        for message in st.session_state.messages[:-1] if prompt else st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+        
+        # Handle new user message
+        if prompt:
             with st.chat_message("user"):
                 st.markdown(prompt)
         
