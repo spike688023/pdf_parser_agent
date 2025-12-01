@@ -1,5 +1,7 @@
 # 📄 PDF Q&A Agent
 
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://spike688023-pdf-parser-agent-app-aapdms.streamlit.app/)
+
 A privacy-first, multi-user PDF question-answering system powered by Google Gemini AI and ADK, featuring intelligent document management, semantic search, automatic tagging, and session-based isolation.
 
 ## ✨ Key Features

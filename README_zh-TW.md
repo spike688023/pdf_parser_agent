@@ -1,5 +1,7 @@
 # 📄 PDF 問答智能助理
 
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://spike688023-pdf-parser-agent-app-aapdms.streamlit.app/)
+
 一個注重隱私、支援多使用者的 PDF 問答系統，由 Google Gemini AI 和 ADK 驅動，具備智能文件管理、語義搜尋、自動標籤生成及 Session 隔離功能。
 
 ## ✨ 核心功能
