@@ -98,30 +98,50 @@ with st.sidebar:
                 # Update session activity
                 update_session_activity(st.session_state.session_id)
                 
-                # Save to session-specific uploads directory
-                session_upload_dir = os.path.join("uploads", st.session_state.session_id)
-                if not os.path.exists(session_upload_dir):
-                    os.makedirs(session_upload_dir)
-                
-                file_path = os.path.join(session_upload_dir, uploaded_file.name)
-                with open(file_path, "wb") as f:
-                    f.write(uploaded_file.getvalue())
-                
-                # Parse first to cache
-                pages = parse_pdf_file(file_path)
-                
-                # Run ingestion with original filename
-                async def process_pdf():
-                    return await ingest_pdf_tool(file_path, pages=pages, original_filename=uploaded_file.name)
-                
+                # Upload to GCS
                 try:
-                    result = asyncio.run(process_pdf())
-                    st.success("✅ PDF processed successfully!")
-                    # Reload documents
-                    load_documents()
-                    st.rerun()
+                    from src.gcs_storage import get_gcs_storage
+                    gcs = get_gcs_storage()
+                    
+                    # Upload file to GCS
+                    destination_blob_name = f"uploads/{st.session_state.session_id}/{uploaded_file.name}"
+                    st.info(f"📤 Uploading to Cloud Storage...")
+                    gcs_uri = gcs.upload_from_file_object(
+                        file_obj=uploaded_file,
+                        destination_blob_name=destination_blob_name
+                    )
+                    st.success(f"✅ Uploaded to: {gcs_uri}")
+                    
+                    # Download to temp location for parsing
+                    st.info("📄 Parsing PDF...")
+                    temp_path = gcs.download_to_temp(destination_blob_name)
+                    
+                    # Parse PDF
+                    pages = parse_pdf_file(temp_path)
+                    
+                    # Run ingestion with GCS URI (not temp path)
+                    async def process_pdf():
+                        return await ingest_pdf_tool(gcs_uri, pages=pages, original_filename=uploaded_file.name)
+                    
+                    try:
+                        result = asyncio.run(process_pdf())
+                        st.success("✅ PDF processed successfully!")
+                        
+                        # Clean up temp file
+                        if os.path.exists(temp_path):
+                            os.unlink(temp_path)
+                        
+                        # Reload documents
+                        load_documents()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Error processing PDF: {e}")
+                        # Clean up temp file on error
+                        if os.path.exists(temp_path):
+                            os.unlink(temp_path)
+                        
                 except Exception as e:
-                    st.error(f"❌ Error processing PDF: {e}")
+                    st.error(f"❌ Error uploading to GCS: {e}")
     
     st.divider()
     

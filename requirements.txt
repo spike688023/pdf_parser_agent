@@ -9,3 +9,4 @@ sentence-transformers
 aiohttp
 google-genai
 google-adk
+google-cloud-storage

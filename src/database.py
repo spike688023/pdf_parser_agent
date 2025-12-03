@@ -2,7 +2,8 @@ import sqlite3
 import faiss
 import numpy as np
 import os
-from typing import List, Dict, Any
+import tempfile
+from typing import List, Dict, Any, Optional
 from google.adk.agents import Agent
 from google.adk.models.google_llm import Gemini
 from google.adk.tools import FunctionTool
@@ -179,11 +180,60 @@ class VectorStore:
         return results
     
     def delete_document(self, document_id: str):
-        """Delete document and its chunks"""
+        """Delete document and its chunks, including GCS files if applicable"""
+        # Get document metadata to check if it has a GCS file
+        doc_metadata = self.get_document_metadata(document_id)
+        
+        # Delete from database
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
         cursor.execute("DELETE FROM documents WHERE document_id = ?", (document_id,))
         self.conn.commit()
+        
+        # Delete from GCS if file_path is a GCS URI
+        if doc_metadata and self.is_gcs_uri(doc_metadata.get('file_path', '')):
+            try:
+                from src.gcs_storage import get_gcs_storage
+                gcs = get_gcs_storage()
+                # Extract blob name from gs://bucket-name/blob-name
+                file_path = doc_metadata['file_path']
+                blob_name = file_path.replace(f"gs://{gcs.bucket_name}/", "")
+                gcs.delete_file(blob_name)
+            except Exception as e:
+                print(f"Warning: Failed to delete GCS file: {e}")
+    
+    @staticmethod
+    def is_gcs_uri(path: str) -> bool:
+        """Check if a path is a GCS URI (starts with gs://)"""
+        return path.startswith("gs://") if path else False
+    
+    def get_local_path(self, file_path: str, cleanup: bool = False) -> str:
+        """Get local path for a file. Downloads from GCS if needed.
+        
+        Args:
+            file_path: Local path or GCS URI
+            cleanup: If True and file was downloaded from GCS, caller is responsible for cleanup
+        
+        Returns:
+            Local file path
+        """
+        if not self.is_gcs_uri(file_path):
+            # Already a local path
+            return file_path
+        
+        # Download from GCS to temp location
+        try:
+            from src.gcs_storage import get_gcs_storage
+            gcs = get_gcs_storage()
+            
+            # Extract blob name from gs://bucket-name/blob-name
+            blob_name = file_path.replace(f"gs://{gcs.bucket_name}/", "")
+            
+            # Download to temp file
+            local_path = gcs.download_to_temp(blob_name)
+            return local_path
+        except Exception as e:
+            raise RuntimeError(f"Failed to download file from GCS: {e}")
 
     def close(self):
         self.conn.close()

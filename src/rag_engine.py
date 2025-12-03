@@ -1,6 +1,7 @@
 import numpy as np
 import os
 import asyncio
+import tempfile
 from typing import List, Dict, Any, Optional
 from google.adk.agents import Agent
 from google.adk.models.google_llm import Gemini
@@ -87,25 +88,35 @@ def ingest_text_tool(text: str, source: str) -> str:
 
 # Tool for QAAgent to ingest a PDF file
 async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, original_filename: Optional[str] = None) -> str:
-    # Handle path resolution
-    if not os.path.exists(file_path) and os.path.exists(os.path.join("uploads", file_path)):
-        file_path = os.path.join("uploads", file_path)
     """
     Ingests a PDF file into the knowledge base.
+    Supports both local paths and GCS URIs (gs://bucket-name/path/to/file.pdf).
     
     Args:
-        file_path: The absolute path to the PDF file.
+        file_path: The absolute path to the PDF file or GCS URI.
         pages: Optional pre-parsed pages to avoid re-parsing.
         original_filename: Optional original filename (for display purposes).
         
     Returns:
         A message indicating success or failure.
     """
+    local_path = file_path
+    temp_file = None
+    
     try:
+        # Handle GCS URIs - download to temp location
+        if _current_session_vector_store and _current_session_vector_store.is_gcs_uri(file_path):
+            print(f"Downloading from GCS: {file_path}")
+            local_path = _current_session_vector_store.get_local_path(file_path)
+            temp_file = local_path  # Mark for cleanup
+        # Handle local path resolution
+        elif not os.path.exists(file_path) and os.path.exists(os.path.join("uploads", file_path)):
+            local_path = os.path.join("uploads", file_path)
+        
         # 1. Parse PDF (if not provided)
         if pages is None:
-            print(f"Parsing PDF: {file_path}")
-            pages = parse_pdf_file(file_path)
+            print(f"Parsing PDF: {local_path}")
+            pages = parse_pdf_file(local_path)
         else:
             print(f"Using pre-parsed pages for: {file_path}")
         
@@ -132,17 +143,25 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
         
         if _current_session_vector_store:
             _current_session_vector_store.save_document_metadata(
-            document_id=document_id,
-            document_name=document_name,
-            file_path=file_path,
-            tags=tags,
-            highlights="",  # Will be generated separately
-            chunk_count=chunk_count
-        )
+                document_id=document_id,
+                document_name=document_name,
+                file_path=file_path,  # Store original path (GCS URI or local)
+                tags=tags,
+                highlights="",  # Will be generated separately
+                chunk_count=chunk_count
+            )
         
         return f"Successfully ingested PDF: {file_path}. Tags: {tags}. {result}"
     except Exception as e:
         return f"Error ingesting PDF: {str(e)}"
+    finally:
+        # Cleanup temp file if we downloaded from GCS
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+                print(f"Cleaned up temp file: {temp_file}")
+            except Exception as cleanup_error:
+                print(f"Warning: Failed to cleanup temp file: {cleanup_error}")
 
 def retrieve_context_tool(query: str) -> str:
     """
@@ -315,23 +334,32 @@ retriever_agent = Agent(
 
 # Tool for Auto-Tagging
 async def tag_document_tool(file_path: str, pages: Optional[List[str]] = None) -> str:
-    # Handle path resolution
-    if not os.path.exists(file_path) and os.path.exists(os.path.join("uploads", file_path)):
-        file_path = os.path.join("uploads", file_path)
     """
     Generates tags for a PDF file using LLM.
+    Supports both local paths and GCS URIs.
     
     Args:
-        file_path: The absolute path to the PDF file.
+        file_path: The absolute path to the PDF file or GCS URI.
         pages: Optional pre-parsed pages.
         
     Returns:
         A comma-separated string of tags.
     """
+    local_path = file_path
+    temp_file = None
+    
     try:
+        # Handle GCS URIs - download to temp location
+        if _current_session_vector_store and _current_session_vector_store.is_gcs_uri(file_path):
+            local_path = _current_session_vector_store.get_local_path(file_path)
+            temp_file = local_path
+        # Handle local path resolution
+        elif not os.path.exists(file_path) and os.path.exists(os.path.join("uploads", file_path)):
+            local_path = os.path.join("uploads", file_path)
+        
         # 1. Parse PDF (if not provided)
         if pages is None:
-            pages = parse_pdf_file(file_path)
+            pages = parse_pdf_file(local_path)
         
         if isinstance(pages, str) or not pages:
             return "Unknown"
@@ -383,27 +411,44 @@ async def tag_document_tool(file_path: str, pages: Optional[List[str]] = None) -
     except Exception as e:
         print(f"Error generating tags: {e}")
         return "Unknown"
+    finally:
+        # Cleanup temp file if we downloaded from GCS
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+            except Exception:
+                pass
 
 # Tool for Auto-Highlighting
 async def highlight_document_tool(file_path: str, pages: Optional[List[str]] = None) -> str:
-    # Handle path resolution
-    if not os.path.exists(file_path) and os.path.exists(os.path.join("uploads", file_path)):
-        file_path = os.path.join("uploads", file_path)
     """
     Extracts key points and highlights from a PDF file using Map-Reduce for large docs.
+    Supports both local paths and GCS URIs.
     
     Args:
-        file_path: The absolute path to the PDF file.
+        file_path: The absolute path to the PDF file or GCS URI.
         pages: Optional pre-parsed pages to avoid re-parsing.
         
     Returns:
         A formatted string containing key points and highlights.
     """
+    local_path = file_path
+    temp_file = None
+    
     try:
+        # Handle GCS URIs - download to temp location
+        if _current_session_vector_store and _current_session_vector_store.is_gcs_uri(file_path):
+            print(f"Downloading from GCS for highlighting: {file_path}")
+            local_path = _current_session_vector_store.get_local_path(file_path)
+            temp_file = local_path
+        # Handle local path resolution
+        elif not os.path.exists(file_path) and os.path.exists(os.path.join("uploads", file_path)):
+            local_path = os.path.join("uploads", file_path)
+        
         # 1. Parse PDF (if not provided)
         if pages is None:
-            print(f"Parsing PDF for highlighting: {file_path}")
-            pages = parse_pdf_file(file_path)
+            print(f"Parsing PDF for highlighting: {local_path}")
+            pages = parse_pdf_file(local_path)
         else:
             print(f"Using pre-parsed pages for highlighting: {file_path}")
         
@@ -501,7 +546,7 @@ async def highlight_document_tool(file_path: str, pages: Optional[List[str]] = N
                     _current_session_vector_store.save_document_metadata(
                         document_id=document_id,
                         document_name=existing["document_name"],
-                        file_path=file_path,
+                        file_path=file_path,  # Store original path (GCS URI or local)
                         tags=existing.get("tags", ""),
                         highlights=highlights_text,
                         chunk_count=existing.get("chunk_count", 0)
@@ -523,6 +568,14 @@ async def highlight_document_tool(file_path: str, pages: Optional[List[str]] = N
         
     except Exception as e:
         return f"Error generating highlights: {str(e)}"
+    finally:
+        # Cleanup temp file if we downloaded from GCS
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+                print(f"Cleaned up temp file: {temp_file}")
+            except Exception:
+                pass
 
 # Highlighter Agent
 highlighter_agent = Agent(

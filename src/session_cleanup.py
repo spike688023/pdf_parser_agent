@@ -25,6 +25,7 @@ class SessionCleanup:
     def cleanup_expired_sessions(self):
         """
         Scan and delete all expired sessions.
+        Cleans up both local files and GCS files.
         """
         try:
             current_time = time.time()
@@ -33,6 +34,9 @@ class SessionCleanup:
             # Track cleanup statistics
             deleted_count = 0
             freed_space = 0
+            
+            # Get list of expired sessions
+            expired_sessions = set()
             
             # Clean up session directories in uploads/
             if os.path.exists("uploads"):
@@ -44,19 +48,43 @@ class SessionCleanup:
                             shutil.rmtree(session_path)
                             freed_space += size
                             deleted_count += 1
+                            expired_sessions.add(session_dir)
                             logger.info(f"Deleted expired session directory: {session_dir}")
             
             # Clean up session databases in storage/
             if os.path.exists("storage"):
                 for db_file in os.listdir("storage"):
-                    if db_file.endswith("_vector.db") or db_file.endswith("_sessions.db"):
+                    if db_file.endswith("_metadata.db") or db_file.endswith("_faiss.index"):
                         session_id = db_file.split("_")[0]
-                        db_path = os.path.join("storage", db_file)
                         if self._is_session_expired(session_id, cutoff_time):
-                            size = os.path.getsize(db_path)
-                            os.remove(db_path)
-                            freed_space += size
-                            logger.info(f"Deleted expired session database: {db_file}")
+                            db_path = os.path.join("storage", db_file)
+                            if os.path.exists(db_path):
+                                size = os.path.getsize(db_path)
+                                os.remove(db_path)
+                                freed_space += size
+                                expired_sessions.add(session_id)
+                                logger.info(f"Deleted expired session file: {db_file}")
+            
+            # Clean up GCS files for expired sessions
+            if expired_sessions:
+                try:
+                    from src.gcs_storage import get_gcs_storage
+                    gcs = get_gcs_storage()
+                    
+                    for session_id in expired_sessions:
+                        # List and delete all files for this session
+                        prefix = f"uploads/{session_id}/"
+                        files = gcs.list_files(prefix=prefix)
+                        
+                        for file_path in files:
+                            try:
+                                gcs.delete_file(file_path)
+                                logger.info(f"Deleted GCS file: {file_path}")
+                            except Exception as e:
+                                logger.warning(f"Failed to delete GCS file {file_path}: {e}")
+                                
+                except Exception as e:
+                    logger.warning(f"Error cleaning up GCS files: {e}")
             
             if deleted_count > 0:
                 logger.info(f"Cleanup complete: {deleted_count} sessions deleted, {freed_space / 1024 / 1024:.2f} MB freed")
