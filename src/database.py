@@ -24,6 +24,25 @@ class VectorStore:
         self.dimension = dimension
         self.session_id = session_id
         
+        # Vertex AI Configuration
+        self.use_vertex_ai = os.getenv("USE_VERTEX_AI", "false").lower() == "true"
+        self.vertex_store = None
+        
+        if self.use_vertex_ai:
+            try:
+                from src.vertex_search import VertexVectorStore
+                self.vertex_store = VertexVectorStore(
+                    project_id=os.getenv("GOOGLE_CLOUD_PROJECT"),
+                    location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
+                    index_endpoint_name=os.getenv("VERTEX_INDEX_ENDPOINT_NAME"),
+                    deployed_index_id=os.getenv("VERTEX_DEPLOYED_INDEX_ID")
+                )
+                print("✅ Using Vertex AI Vector Search")
+            except Exception as e:
+                print(f"❌ Failed to initialize Vertex AI: {e}")
+                print("⚠️  Falling back to local FAISS")
+                self.use_vertex_ai = False
+        
         # Use session-specific database if session_id is provided
         if session_id:
             self.db_path = os.path.join(storage_dir, f"{session_id}_metadata.db")
@@ -91,21 +110,56 @@ class VectorStore:
             raise ValueError("Number of items and embeddings must match")
 
         cursor = self.conn.cursor()
+        inserted_ids = []
+        
         for item in items:
             cursor.execute(
                 "INSERT INTO chunks (text, page_number, source, document_id, document_name, tags) VALUES (?, ?, ?, ?, ?, ?)",
                 (item["text"], item["page_number"], item["source"], 
                  item.get("document_id", ""), item.get("document_name", ""), item.get("tags", ""))
             )
+            inserted_ids.append(str(cursor.lastrowid))
+            
         self.conn.commit()
         
+        # Add to Vertex AI if enabled
+        if self.use_vertex_ai and self.vertex_store:
+            self.vertex_store.add_items(inserted_ids, embeddings)
+        
+        # Always add to local FAISS as backup/fallback
         self.index.add(embeddings.astype('float32'))
         self.save_index()
 
     def search(self, query_embedding: np.ndarray, k: int = 5) -> List[Dict[str, Any]]:
-        distances, indices = self.index.search(query_embedding.astype('float32').reshape(1, -1), k)
         results = []
         cursor = self.conn.cursor()
+        
+        # Try Vertex AI Search first
+        if self.use_vertex_ai and self.vertex_store:
+            try:
+                vertex_results = self.vertex_store.search(query_embedding, k)
+                
+                for res in vertex_results:
+                    chunk_id = int(res["id"])
+                    cursor.execute("SELECT text, page_number, source, document_id, document_name, tags FROM chunks WHERE id = ?", (chunk_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        results.append({
+                            "text": row[0],
+                            "page_number": row[1],
+                            "source": row[2],
+                            "document_id": row[3],
+                            "document_name": row[4],
+                            "tags": row[5],
+                            "distance": float(res["distance"])
+                        })
+                return results
+            except Exception as e:
+                print(f"⚠️ Vertex AI search failed: {e}. Falling back to local FAISS.")
+                # Fallback to local FAISS
+        
+        # Local FAISS Search
+        distances, indices = self.index.search(query_embedding.astype('float32').reshape(1, -1), k)
         for i, idx in enumerate(indices[0]):
             if idx == -1: continue
             chunk_id = int(idx) + 1
