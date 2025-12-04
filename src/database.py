@@ -24,6 +24,20 @@ class VectorStore:
         self.dimension = dimension
         self.session_id = session_id
         
+        # Firestore Configuration
+        self.use_firestore = os.getenv("USE_FIRESTORE", "false").lower() == "true"
+        self.firestore_db = None
+        
+        if self.use_firestore:
+            try:
+                from src.firestore_db import get_firestore_db
+                self.firestore_db = get_firestore_db(session_id=session_id)
+                print("✅ Using Firestore for metadata")
+            except Exception as e:
+                print(f"❌ Failed to initialize Firestore: {e}")
+                print("⚠️  Falling back to local SQLite")
+                self.use_firestore = False
+        
         # Vertex AI Configuration
         self.use_vertex_ai = os.getenv("USE_VERTEX_AI", "false").lower() == "true"
         self.vertex_store = None
@@ -55,7 +69,9 @@ class VectorStore:
         if not os.path.exists(storage_dir):
             os.makedirs(storage_dir)
             
-        self._init_db()
+        # Only init local DB if not using Firestore
+        if not self.use_firestore:
+            self._init_db()
         self._init_index()
 
     def _init_db(self):
@@ -109,18 +125,22 @@ class VectorStore:
         if len(items) != len(embeddings):
             raise ValueError("Number of items and embeddings must match")
 
-        cursor = self.conn.cursor()
         inserted_ids = []
         
-        for item in items:
-            cursor.execute(
-                "INSERT INTO chunks (text, page_number, source, document_id, document_name, tags) VALUES (?, ?, ?, ?, ?, ?)",
-                (item["text"], item["page_number"], item["source"], 
-                 item.get("document_id", ""), item.get("document_name", ""), item.get("tags", ""))
-            )
-            inserted_ids.append(str(cursor.lastrowid))
-            
-        self.conn.commit()
+        # Add to Firestore if enabled
+        if self.use_firestore and self.firestore_db:
+            inserted_ids = self.firestore_db.add_chunks(items)
+        else:
+            # Add to local SQLite
+            cursor = self.conn.cursor()
+            for item in items:
+                cursor.execute(
+                    "INSERT INTO chunks (text, page_number, source, document_id, document_name, tags) VALUES (?, ?, ?, ?, ?, ?)",
+                    (item["text"], item["page_number"], item["source"], 
+                     item.get("document_id", ""), item.get("document_name", ""), item.get("tags", ""))
+                )
+                inserted_ids.append(str(cursor.lastrowid))
+            self.conn.commit()
         
         # Add to Vertex AI if enabled
         if self.use_vertex_ai and self.vertex_store:
@@ -132,27 +152,42 @@ class VectorStore:
 
     def search(self, query_embedding: np.ndarray, k: int = 5) -> List[Dict[str, Any]]:
         results = []
-        cursor = self.conn.cursor()
         
         # Try Vertex AI Search first
         if self.use_vertex_ai and self.vertex_store:
             try:
                 vertex_results = self.vertex_store.search(query_embedding, k)
+                chunk_ids = [res["id"] for res in vertex_results]
                 
-                for res in vertex_results:
-                    chunk_id = int(res["id"])
-                    cursor.execute("SELECT text, page_number, source, document_id, document_name, tags FROM chunks WHERE id = ?", (chunk_id,))
-                    row = cursor.fetchone()
-                    if row:
+                # Retrieve chunk text from Firestore or SQLite
+                if self.use_firestore and self.firestore_db:
+                    chunks = self.firestore_db.get_chunks_by_ids(chunk_ids)
+                    for i, chunk in enumerate(chunks):
                         results.append({
-                            "text": row[0],
-                            "page_number": row[1],
-                            "source": row[2],
-                            "document_id": row[3],
-                            "document_name": row[4],
-                            "tags": row[5],
-                            "distance": float(res["distance"])
+                            "text": chunk.get("text", ""),
+                            "page_number": chunk.get("page_number", 0),
+                            "source": chunk.get("source", ""),
+                            "document_id": chunk.get("document_id", ""),
+                            "document_name": chunk.get("document_name", ""),
+                            "tags": chunk.get("tags", ""),
+                            "distance": float(vertex_results[i]["distance"])
                         })
+                else:
+                    cursor = self.conn.cursor()
+                    for res in vertex_results:
+                        chunk_id = int(res["id"])
+                        cursor.execute("SELECT text, page_number, source, document_id, document_name, tags FROM chunks WHERE id = ?", (chunk_id,))
+                        row = cursor.fetchone()
+                        if row:
+                            results.append({
+                                "text": row[0],
+                                "page_number": row[1],
+                                "source": row[2],
+                                "document_id": row[3],
+                                "document_name": row[4],
+                                "tags": row[5],
+                                "distance": float(res["distance"])
+                            })
                 return results
             except Exception as e:
                 print(f"⚠️ Vertex AI search failed: {e}. Falling back to local FAISS.")
@@ -160,21 +195,30 @@ class VectorStore:
         
         # Local FAISS Search
         distances, indices = self.index.search(query_embedding.astype('float32').reshape(1, -1), k)
+        
+        if self.use_firestore and self.firestore_db:
+            # Get chunk IDs from FAISS indices (need to map)
+            # Note: This is tricky because Firestore uses string IDs, but FAISS uses integer indices
+            # For now, we'll fall back to SQLite for FAISS+Firestore combo
+            print("⚠️ FAISS + Firestore combination not fully supported. Using SQLite.")
+            
+        cursor = self.conn.cursor() if not self.use_firestore else None
         for i, idx in enumerate(indices[0]):
             if idx == -1: continue
             chunk_id = int(idx) + 1
-            cursor.execute("SELECT text, page_number, source, document_id, document_name, tags FROM chunks WHERE id = ?", (chunk_id,))
-            row = cursor.fetchone()
-            if row:
-                results.append({
-                    "text": row[0],
-                    "page_number": row[1],
-                    "source": row[2],
-                    "document_id": row[3],
-                    "document_name": row[4],
-                    "tags": row[5],
-                    "distance": float(distances[0][i])
-                })
+            if cursor:
+                cursor.execute("SELECT text, page_number, source, document_id, document_name, tags FROM chunks WHERE id = ?", (chunk_id,))
+                row = cursor.fetchone()
+                if row:
+                    results.append({
+                        "text": row[0],
+                        "page_number": row[1],
+                        "source": row[2],
+                        "document_id": row[3],
+                        "document_name": row[4],
+                        "tags": row[5],
+                        "distance": float(distances[0][i])
+                    })
         return results
 
     def save_index(self):
@@ -183,55 +227,66 @@ class VectorStore:
     def save_document_metadata(self, document_id: str, document_name: str, file_path: str, 
                                tags: str = "", highlights: str = "", chunk_count: int = 0):
         """Save or update document metadata"""
-        from datetime import datetime
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            INSERT OR REPLACE INTO documents 
-            (document_id, document_name, file_path, tags, highlights, upload_time, chunk_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (document_id, document_name, file_path, tags, highlights, 
-              datetime.now().isoformat(), chunk_count))
-        self.conn.commit()
+        if self.use_firestore and self.firestore_db:
+            self.firestore_db.save_document_metadata(
+                document_id, document_name, file_path, tags, highlights, chunk_count
+            )
+        else:
+            from datetime import datetime
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO documents 
+                (document_id, document_name, file_path, tags, highlights, upload_time, chunk_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (document_id, document_name, file_path, tags, highlights, 
+                  datetime.now().isoformat(), chunk_count))
+            self.conn.commit()
     
     def get_document_metadata(self, document_id: str) -> Dict[str, Any]:
         """Retrieve document metadata"""
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT document_id, document_name, file_path, tags, highlights, upload_time, chunk_count
-            FROM documents WHERE document_id = ?
-        """, (document_id,))
-        row = cursor.fetchone()
-        if row:
-            return {
-                "document_id": row[0],
-                "document_name": row[1],
-                "file_path": row[2],
-                "tags": row[3],
-                "highlights": row[4],
-                "upload_time": row[5],
-                "chunk_count": row[6]
-            }
-        return None
+        if self.use_firestore and self.firestore_db:
+            return self.firestore_db.get_document_metadata(document_id)
+        else:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT document_id, document_name, file_path, tags, highlights, upload_time, chunk_count
+                FROM documents WHERE document_id = ?
+            """, (document_id,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "document_id": row[0],
+                    "document_name": row[1],
+                    "file_path": row[2],
+                    "tags": row[3],
+                    "highlights": row[4],
+                    "upload_time": row[5],
+                    "chunk_count": row[6]
+                }
+            return None
     
     def list_all_documents(self) -> List[Dict[str, Any]]:
         """List all documents with metadata"""
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT document_id, document_name, file_path, tags, highlights, upload_time, chunk_count
-            FROM documents ORDER BY upload_time DESC
-        """)
-        results = []
-        for row in cursor.fetchall():
-            results.append({
-                "document_id": row[0],
-                "document_name": row[1],
-                "file_path": row[2],
-                "tags": row[3],
-                "highlights": row[4],
-                "upload_time": row[5],
-                "chunk_count": row[6]
-            })
-        return results
+        if self.use_firestore and self.firestore_db:
+            return self.firestore_db.list_all_documents()
+        else:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT document_id, document_name, file_path, tags, highlights, upload_time, chunk_count
+                FROM documents ORDER BY upload_time DESC
+            """)
+            results = []
+            for row in cursor.fetchall():
+                results.append({
+                    "document_id": row[0],
+                    "document_name": row[1],
+                    "file_path": row[2],
+                    "tags": row[3],
+                    "highlights": row[4],
+                    "upload_time": row[5],
+                    "chunk_count": row[6]
+                })
+            return results
     
     def delete_document(self, document_id: str):
         """Delete document and its chunks, including GCS files if applicable"""
@@ -239,10 +294,13 @@ class VectorStore:
         doc_metadata = self.get_document_metadata(document_id)
         
         # Delete from database
-        cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
-        cursor.execute("DELETE FROM documents WHERE document_id = ?", (document_id,))
-        self.conn.commit()
+        if self.use_firestore and self.firestore_db:
+            self.firestore_db.delete_document(document_id)
+        else:
+            cursor = self.conn.cursor()
+            cursor.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
+            cursor.execute("DELETE FROM documents WHERE document_id = ?", (document_id,))
+            self.conn.commit()
         
         # Delete from GCS if file_path is a GCS URI
         if doc_metadata and self.is_gcs_uri(doc_metadata.get('file_path', '')):

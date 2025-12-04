@@ -86,6 +86,27 @@ class SessionCleanup:
                 except Exception as e:
                     logger.warning(f"Error cleaning up GCS files: {e}")
             
+            # Clean up Firestore sessions
+            use_firestore = os.getenv("USE_FIRESTORE", "false").lower() == "true"
+            if use_firestore:
+                try:
+                    from src.firestore_db import get_firestore_db
+                    firestore_db = get_firestore_db()
+                    
+                    # Get expired sessions from Firestore
+                    firestore_expired = firestore_db.list_expired_sessions(self.expiry_seconds)
+                    
+                    for session_id in firestore_expired:
+                        try:
+                            firestore_db.delete_session(session_id)
+                            logger.info(f"Deleted expired Firestore session: {session_id}")
+                            deleted_count += 1
+                        except Exception as e:
+                            logger.warning(f"Failed to delete Firestore session {session_id}: {e}")
+                            
+                except Exception as e:
+                    logger.warning(f"Error cleaning up Firestore sessions: {e}")
+            
             if deleted_count > 0:
                 logger.info(f"Cleanup complete: {deleted_count} sessions deleted, {freed_space / 1024 / 1024:.2f} MB freed")
             

@@ -11,3 +11,4 @@ google-genai
 google-adk
 google-cloud-storage
 google-cloud-aiplatform
+google-cloud-firestore
