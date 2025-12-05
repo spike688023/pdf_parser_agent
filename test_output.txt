@@ -1,0 +1,61 @@
+/Users/linspike/anaconda3/lib/python3.12/site-packages/google/cloud/firestore_v1/base_collection.py:304: UserWarning: Detected filter using positional arguments. Prefer using the 'filter' keyword argument instead.
+  return query.where(field_path, op_string, value)
+
+🚀 Cloud Native Configuration Test
+==================================================
+==================================================
+1️⃣  Testing Environment Variables
+==================================================
+✅ GOOGLE_API_KEY: AIzaSyBDJ2SR_CGRhf3HDNmEft_pQ8AsRXvWp5s
+✅ GCS_BUCKET_NAME: my-pdf-files__spike688023
+✅ GOOGLE_CLOUD_PROJECT: gen-lang-client-0044574038
+✅ GOOGLE_CLOUD_LOCATION: us-west1
+✅ USE_VERTEX_AI: true
+✅ USE_FIRESTORE: true
+✅ VERTEX_INDEX_ENDPOINT_NAME: projects/780224666367/locations/us-west1/indexEndpoints/1853446750942003200
+✅ VERTEX_DEPLOYED_INDEX_ID: pdf_agent_deployed_index
+
+==================================================
+2️⃣  Testing GCS Connection
+==================================================
+❌ GCS Connection failed: GCSStorage.list_files() got an unexpected keyword argument 'max_results'
+
+==================================================
+3️⃣  Testing Vertex AI Connection
+==================================================
+✅ Vertex AI Connection successful
+   Endpoint: projects/780224666367/locations/us-west1/indexEndpoints/1853446750942003200
+   Deployed Index ID: pdf_agent_deployed_index
+   Search results: 0 items
+
+==================================================
+4️⃣  Testing Firestore Connection
+==================================================
+✅ Firestore Connection successful
+   Project: gen-lang-client-0044574038
+   Database: pdf-agent
+   Test document created and deleted successfully
+
+==================================================
+5️⃣  Testing Database Integration
+==================================================
+✅ Using Firestore for metadata
+✅ Using Vertex AI Vector Search
+✅ Using Firestore for metadata
+✅ Using Vertex AI Vector Search
+✅ VectorStore initialized
+   Using Firestore: True
+   Using Vertex AI: True
+
+==================================================
+📊 Test Summary
+==================================================
+✅ PASS - Environment Variables
+❌ FAIL - GCS Connection
+✅ PASS - Vertex AI Connection
+✅ PASS - Firestore Connection
+✅ PASS - Database Integration
+
+==================================================
+⚠️  Some tests failed. Please check the errors above.
+==================================================
