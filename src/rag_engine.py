@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 from google.adk.agents import Agent
 from google.adk.models.google_llm import Gemini
 from google.adk.tools import FunctionTool
-from .database import add_to_database, search_database
+from .database import add_to_database, search_database, set_session_vector_store
 from src.pdf_parser import parser_agent, parse_pdf_file
 from sentence_transformers import SentenceTransformer
 import google.generativeai as genai
@@ -14,14 +14,10 @@ import google.generativeai as genai
 # Configuration
 from google.genai import types
 
-# Global variable to store current session's vector store
-# This will be set by app.py before calling any tools
-_current_session_vector_store = None
-
-def set_session_vector_store(vector_store):
-    """Set the vector store for the current session."""
-    global _current_session_vector_store
-    _current_session_vector_store = vector_store
+def get_session_vector_store():
+    """Get the current session's vector store."""
+    from src.database import _current_session_vector_store
+    return _current_session_vector_store
 
 # Configuration
 retry_config = types.HttpRetryOptions(
@@ -105,9 +101,10 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
     
     try:
         # Handle GCS URIs - download to temp location
-        if _current_session_vector_store and _current_session_vector_store.is_gcs_uri(file_path):
+        vector_store = get_session_vector_store()
+        if vector_store and vector_store.is_gcs_uri(file_path):
             print(f"Downloading from GCS: {file_path}")
-            local_path = _current_session_vector_store.get_local_path(file_path)
+            local_path = vector_store.get_local_path(file_path)
             temp_file = local_path  # Mark for cleanup
         # Handle local path resolution
         elif not os.path.exists(file_path) and os.path.exists(os.path.join("uploads", file_path)):
@@ -141,8 +138,9 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
         document_name = original_filename if original_filename else os.path.basename(file_path)
         chunk_count = len(_chunk_pages(pages, file_path, tags=tags))
         
-        if _current_session_vector_store:
-            _current_session_vector_store.save_document_metadata(
+        vector_store = get_session_vector_store()
+        if vector_store:
+            vector_store.save_document_metadata(
                 document_id=document_id,
                 document_name=document_name,
                 file_path=file_path,  # Store original path (GCS URI or local)
@@ -188,8 +186,9 @@ def retrieve_context_tool(query: str) -> str:
             doc_id = chunk.get('document_id')
             
             # Add document highlights if not already added
-            if doc_id and doc_id not in seen_docs and _current_session_vector_store:
-                doc_meta = _current_session_vector_store.get_document_metadata(doc_id)
+            vector_store = get_session_vector_store()
+            if doc_id and doc_id not in seen_docs and vector_store:
+                doc_meta = vector_store.get_document_metadata(doc_id)
                 if doc_meta and doc_meta.get('highlights'):
                     context_str += f"[Document Summary & Highlights for {doc_name}]:\n{doc_meta['highlights']}\n\n"
                 seen_docs.add(doc_id)
@@ -215,10 +214,11 @@ def list_documents_tool(document_names: Optional[List[str]] = None) -> str:
         Formatted string with document information including highlights.
     """
     try:
-        if not _current_session_vector_store:
+        vector_store = get_session_vector_store()
+        if not vector_store:
             return "Error: Session not initialized"
             
-        all_docs = _current_session_vector_store.list_all_documents()
+        all_docs = vector_store.list_all_documents()
         
         if not all_docs:
             return "No documents found in the library."
@@ -350,8 +350,9 @@ async def tag_document_tool(file_path: str, pages: Optional[List[str]] = None) -
     
     try:
         # Handle GCS URIs - download to temp location
-        if _current_session_vector_store and _current_session_vector_store.is_gcs_uri(file_path):
-            local_path = _current_session_vector_store.get_local_path(file_path)
+        vector_store = get_session_vector_store()
+        if vector_store and vector_store.is_gcs_uri(file_path):
+            local_path = vector_store.get_local_path(file_path)
             temp_file = local_path
         # Handle local path resolution
         elif not os.path.exists(file_path) and os.path.exists(os.path.join("uploads", file_path)):
@@ -437,9 +438,10 @@ async def highlight_document_tool(file_path: str, pages: Optional[List[str]] = N
     
     try:
         # Handle GCS URIs - download to temp location
-        if _current_session_vector_store and _current_session_vector_store.is_gcs_uri(file_path):
+        vector_store = get_session_vector_store()
+        if vector_store and vector_store.is_gcs_uri(file_path):
             print(f"Downloading from GCS for highlighting: {file_path}")
-            local_path = _current_session_vector_store.get_local_path(file_path)
+            local_path = vector_store.get_local_path(file_path)
             temp_file = local_path
         # Handle local path resolution
         elif not os.path.exists(file_path) and os.path.exists(os.path.join("uploads", file_path)):
@@ -540,10 +542,11 @@ async def highlight_document_tool(file_path: str, pages: Optional[List[str]] = N
             document_id = hashlib.md5(file_path.encode()).hexdigest()[:16]
             
             # Get existing metadata and save highlights
-            if _current_session_vector_store:
-                existing = _current_session_vector_store.get_document_metadata(document_id)
+            vector_store = get_session_vector_store()
+            if vector_store:
+                existing = vector_store.get_document_metadata(document_id)
                 if existing:
-                    _current_session_vector_store.save_document_metadata(
+                    vector_store.save_document_metadata(
                         document_id=document_id,
                         document_name=existing["document_name"],
                         file_path=file_path,  # Store original path (GCS URI or local)

@@ -350,16 +350,28 @@ class VectorStore:
     def close(self):
         self.conn.close()
 
-# Singleton instance for tools to use
+# Singleton instance for tools to use (fallback only)
 _vector_store = VectorStore()
+
+# Global variable to store current session's vector store
+# This will be set by rag_engine.py when a session is active
+_current_session_vector_store = None
+
+def set_session_vector_store(vector_store):
+    """Set the vector store for the current session."""
+    global _current_session_vector_store
+    _current_session_vector_store = vector_store
 
 # ======== Database Tools ========
 def add_to_database(items: List[Dict[str, Any]], embeddings: np.ndarray) -> str:
     """
     Adds items and embeddings to the vector store.
+    Uses session-specific vector store if available, otherwise falls back to global.
     """
     try:
-        _vector_store.add_items(items, embeddings)
+        # Use session-specific vector store if available
+        store = _current_session_vector_store if _current_session_vector_store else _vector_store
+        store.add_items(items, embeddings)
         return f"Successfully added {len(items)} items to database."
     except Exception as e:
         return f"Error adding items: {e}"
@@ -367,9 +379,12 @@ def add_to_database(items: List[Dict[str, Any]], embeddings: np.ndarray) -> str:
 def search_database(query_embedding: np.ndarray, k: int = 5) -> List[Dict[str, Any]]:
     """
     Searches the vector store for nearest neighbors.
+    Uses session-specific vector store if available, otherwise falls back to global.
     """
     try:
-        return _vector_store.search(query_embedding, k)
+        # Use session-specific vector store if available
+        store = _current_session_vector_store if _current_session_vector_store else _vector_store
+        return store.search(query_embedding, k)
     except Exception as e:
         print(f"Error searching database: {e}")
         return []
