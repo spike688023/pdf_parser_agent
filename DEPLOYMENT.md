@@ -74,14 +74,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 複製應用程式
 COPY . .
 
-# 暴露 Streamlit 預設端口
-EXPOSE 8501
+# 暴露端口（Cloud Run 會設定 PORT 環境變數）
+EXPOSE 8080
 
-# 設定健康檢查
-HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health || exit 1
+# 設定健康檢查（使用環境變數 PORT）
+HEALTHCHECK CMD curl --fail http://localhost:${PORT:-8080}/_stcore/health || exit 1
 
-# 啟動 Streamlit
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# 啟動 Streamlit（使用 PORT 環境變數，預設 8080）
+CMD streamlit run app.py --server.port=${PORT:-8080} --server.address=0.0.0.0
 ```
 
 ### 步驟 2: 創建 .dockerignore
@@ -288,6 +288,33 @@ sudo journalctl -u pdf-qa-agent -f
 
 ---
 
+## 監控與維護腳本
+
+專案包含了一組腳本，用於檢查 Cloud Run Container 的健康狀態並自動喚醒（避免冷啟動）。
+
+### 腳本位置
+- `scripts/check_container.sh` (Bash 版本)
+- `scripts/check_container.py` (Python 版本，功能更強)
+
+### 使用方式
+
+```bash
+# 檢查狀態
+python scripts/check_container.py
+
+# 強制喚醒 Container
+python scripts/check_container.py --force-wake
+
+# 查看詳細日誌
+python scripts/check_container.py --verbose --show-logs
+```
+
+### 定期保活 (Keep-Alive)
+
+可以使用 Cloud Scheduler 定期執行此腳本，或設定 Cloud Run `min-instances=1`。
+
+---
+
 ## 故障排除
 
 ### 問題 1: 冷啟動超時
@@ -302,7 +329,18 @@ gcloud run services update pdf-qa-agent \
   --region=us-west1
 ```
 
-### 問題 2: 記憶體不足
+### 問題 2: 端口配置錯誤 (Port 8080 vs 8501)
+
+**症狀**: 部署失敗，錯誤訊息 `The user-provided container failed to start and listen on the port defined provided by the PORT=8080`
+
+**原因**: Cloud Run 預設期望容器監聽 8080 端口，但 Streamlit 預設使用 8501。
+
+**解決方案**: 修改 Dockerfile 使用 `PORT` 環境變數：
+```dockerfile
+CMD streamlit run app.py --server.port=${PORT:-8080} --server.address=0.0.0.0
+```
+
+### 問題 3: 記憶體不足
 
 **症狀**: 應用崩潰或 OOM 錯誤
 
@@ -314,7 +352,7 @@ gcloud run services update pdf-qa-agent \
   --region=us-west1
 ```
 
-### 問題 3: Vertex AI 連接失敗
+### 問題 4: Vertex AI 連接失敗
 
 **症狀**: 搜尋功能不工作
 
@@ -328,7 +366,7 @@ gcloud run services update pdf-qa-agent \
 gcloud ai index-endpoints describe 1853446750942003200 --region=us-west1
 ```
 
-### 問題 4: Firestore 權限錯誤
+### 問題 5: Firestore 權限錯誤
 
 **解決方案**:
 ```bash
