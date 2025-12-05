@@ -28,7 +28,12 @@ def test_environment_variables():
     for var in required_vars:
         value = os.getenv(var)
         status = "✅" if value else "❌"
-        print(f"{status} {var}: {value if value else 'NOT SET'}")
+        # Mask API key to prevent leaking
+        if var == "GOOGLE_API_KEY" and value:
+            masked_value = f"{value[:10]}...{value[-4:]}"
+            print(f"{status} {var}: {masked_value}")
+        else:
+            print(f"{status} {var}: {value if value else 'NOT SET'}")
         if not value:
             all_set = False
     
