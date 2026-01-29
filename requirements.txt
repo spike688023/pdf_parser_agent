@@ -5,7 +5,7 @@ numpy
 python-dotenv
 pdfplumber
 streamlit
-sentence-transformers
+requests
 aiohttp
 google-genai
 google-adk

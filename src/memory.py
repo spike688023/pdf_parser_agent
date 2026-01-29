@@ -7,13 +7,18 @@ import json
 from google.adk.memory import BaseMemoryService
 from google.adk.events.event import Event
 from google.adk.sessions import Session
-from sentence_transformers import SentenceTransformer
+import requests
+
+# Reuse config from rag_engine or define locally
+EMBEDDING_SERVICE_URL = os.getenv("EMBEDDING_SERVICE_URL", "http://nim-embedding:8000/v1/embeddings")
+EMBEDDING_MODEL_NAME = "nvidia/llama-3.2-nv-embedqa-1b-v2"
 
 class LocalVectorMemoryService(BaseMemoryService):
-    def __init__(self, storage_dir: str = "storage", dimension: int = 384):
+    def __init__(self, storage_dir: str = "storage", dimension: int = 1024):
+        # Note: llama-3.2-nv-embedqa-1b-v2 has 1024 dimensions, NOT 384
         super().__init__()
         self.storage_dir = storage_dir
-        self.dimension = dimension  # all-MiniLM-L6-v2 produces 384-dim embeddings
+        self.dimension = dimension  
         self.db_path = os.path.join(storage_dir, "memory_metadata.db")
         self.index_path = os.path.join(storage_dir, "memory_faiss.index")
         
@@ -23,8 +28,8 @@ class LocalVectorMemoryService(BaseMemoryService):
         self._init_db()
         self._init_index()
         
-        # Initialize local embedding model (same as rag_engine.py)
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        # Initialize NIM client (stateless, so nothing to init)
+        pass
 
     def _init_db(self):
         conn = sqlite3.connect(self.db_path)
@@ -146,10 +151,25 @@ class LocalVectorMemoryService(BaseMemoryService):
         return results
 
     def _generate_embeddings(self, texts: List[str]) -> Optional[np.ndarray]:
+        if not texts:
+            return None
+            
+        payload = {
+            "input": texts,
+            "model": EMBEDDING_MODEL_NAME,
+            "input_type": "passage",
+            "encoding_format": "float"
+        }
+        
         try:
-            # Generate embeddings using local model
-            embeddings = self.embedding_model.encode(texts)
+            response = requests.post(EMBEDDING_SERVICE_URL, json=payload, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            # Ensure correct order
+            embeddings_data = sorted(data.get("data", []), key=lambda x: x["index"])
+            embeddings = [item["embedding"] for item in embeddings_data]
             return np.array(embeddings)
         except Exception as e:
-            print(f"Error generating embeddings: {e}")
-        return None
+            print(f"Error calling Embedding NIM for memory: {e}")
+            return None

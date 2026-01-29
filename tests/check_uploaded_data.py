@@ -81,7 +81,7 @@ def check_vertex_vectors():
         )
         
         import numpy as np
-        query_vector = np.random.rand(384).astype('float32')
+        query_vector = np.random.rand(1024).astype('float32')
         results = vertex_store.search(query_vector, k=10)
         
         print(f"\n📊 Vectors found: {len(results)}")

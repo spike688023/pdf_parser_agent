@@ -78,8 +78,8 @@ def test_vertex_ai_connection():
             deployed_index_id=os.getenv("VERTEX_DEPLOYED_INDEX_ID")
         )
         
-        # Test search with dummy embedding
-        dummy_embedding = np.random.rand(384).astype('float32')
+        # Test search with dummy embedding (now 1024 dim for NIM)
+        dummy_embedding = np.random.rand(1024).astype('float32')
         results = vertex_store.search(dummy_embedding, k=1)
         
         print(f"✅ Vertex AI Connection successful")

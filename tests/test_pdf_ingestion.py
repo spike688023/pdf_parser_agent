@@ -74,7 +74,7 @@ async def test_pdf_ingestion():
             deployed_index_id=os.getenv("VERTEX_DEPLOYED_INDEX_ID")
         )
         
-        query_vector = np.random.rand(384).astype('float32')
+        query_vector = np.random.rand(1024).astype('float32')
         results = vertex_store.search(query_vector, k=10)
         
         # Filter out test vectors

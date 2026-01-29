@@ -35,7 +35,7 @@ def test_upload_vectors():
         # Create test vectors
         print(f"\n📝 Creating test vectors...")
         test_ids = ["test_vector_1", "test_vector_2", "test_vector_3"]
-        test_embeddings = np.random.rand(3, 384).astype('float32')
+        test_embeddings = np.random.rand(3, 1024).astype('float32')
         
         print(f"   IDs: {test_ids}")
         print(f"   Embeddings shape: {test_embeddings.shape}")

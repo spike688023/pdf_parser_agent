@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reranking-nim
+  namespace: default
+  labels:
+    app: reranking-nim
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: reranking-nim
+  template:
+    metadata:
+      labels:
+        app: reranking-nim
+    spec:
+      imagePullSecrets:
+        - name: ngc-secret
+      containers:
+        - name: reranking-nim
+          # 使用 NVIDIA Llama-3.2-NV-RerankQA-1B-v2 模型
+          image: nvcr.io/nim/nvidia/llama-3.2-nv-rerankqa-1b-v2:1.0.0
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+          env:
+            - name: NIM_CACHE_PATH
+              value: "/opt/nim/.cache"
+          ports:
+            - containerPort: 8000
+              name: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: reranking-nim
+  namespace: default
+spec:
+  selector:
+    app: reranking-nim
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

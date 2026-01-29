@@ -8,7 +8,9 @@ from google.adk.models.google_llm import Gemini
 from google.adk.tools import FunctionTool
 from .database import add_to_database, search_database, set_session_vector_store
 from src.pdf_parser import parser_agent, parse_pdf_file
-from sentence_transformers import SentenceTransformer
+from .database import add_to_database, search_database, set_session_vector_store
+from src.pdf_parser import parser_agent, parse_pdf_file
+import requests
 import google.generativeai as genai
 
 # Configuration
@@ -27,10 +29,64 @@ retry_config = types.HttpRetryOptions(
     http_status_codes=[429, 500, 503, 504]
 )
 
-# Initialize local embedding model
-# Using all-MiniLM-L6-v2: lightweight, fast, good quality
-# First run will download ~80MB model file
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+# NIM Configuration
+EMBEDDING_SERVICE_URL = os.getenv("EMBEDDING_SERVICE_URL", "http://nim-embedding:8000/v1/embeddings")
+RERANKING_SERVICE_URL = os.getenv("RERANKING_SERVICE_URL", "http://nim-reranking:8000/v1/ranking")
+EMBEDDING_MODEL_NAME = "nvidia/llama-3.2-nv-embedqa-1b-v2"
+RERANKING_MODEL_NAME = "nvidia/llama-3.2-nv-rerankqa-1b-v2"
+
+def _get_nim_embeddings(texts: List[str], input_type: str = "passage") -> np.ndarray:
+    """Call NVIDIA Embedding NIM service."""
+    if not texts:
+        return np.array([])
+        
+    payload = {
+        "input": texts,
+        "model": EMBEDDING_MODEL_NAME,
+        "input_type": input_type,
+        "encoding_format": "float"
+    }
+    
+    try:
+        response = requests.post(EMBEDDING_SERVICE_URL, json=payload, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Ensure correct ordering based on index
+        embeddings_data = sorted(data.get("data", []), key=lambda x: x["index"])
+        embeddings = [item["embedding"] for item in embeddings_data]
+        return np.array(embeddings)
+    except Exception as e:
+        print(f"Error calling Embedding NIM: {e}")
+        # Fallback or empty? Raising error is better to fail fast
+        raise e
+
+def _rerank_documents(query: str, documents: List[str]) -> List[int]:
+    """
+    Call NVIDIA Reranking NIM service.
+    Returns list of indices sorted by relevance (most relevant first).
+    """
+    if not documents:
+        return []
+        
+    payload = {
+        "model": RERANKING_MODEL_NAME,
+        "query": {"text": query},
+        "documents": [{"text": doc} for doc in documents]
+    }
+    
+    try:
+        response = requests.post(RERANKING_SERVICE_URL, json=payload, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Extract rankings
+        # Response format: {"rankings": [{"index": 0, "logit": 0.9}, ...]}
+        rankings = data.get("rankings", [])
+        return [r["index"] for r in rankings]
+    except Exception as e:
+        print(f"Warning: Reranking NIM failed ({e}). Returning original order.")
+        return list(range(len(documents)))
 
 # ======== RAG Tools ========
 def ingest_pages_tool(pages: List[tuple], source: str, tags: str = "") -> str:
@@ -49,10 +105,8 @@ def ingest_pages_tool(pages: List[tuple], source: str, tags: str = "") -> str:
     texts = [chunk["text"] for chunk in chunks]
     
     try:
-        # Generate embeddings using local model
-        # This runs on your CPU, no API calls
-        embeddings = embedding_model.encode(texts, show_progress_bar=True)
-        embeddings_np = np.array(embeddings)
+        # Generate embeddings using NIM
+        embeddings_np = _get_nim_embeddings(texts, input_type="passage")
         
         # Call database tool
         return add_to_database(chunks, embeddings_np)
@@ -71,10 +125,8 @@ def ingest_text_tool(text: str, source: str) -> str:
     texts = [chunk["text"] for chunk in chunks]
     
     try:
-        # Generate embeddings using local model
-        # This runs on your CPU, no API calls
-        embeddings = embedding_model.encode(texts, show_progress_bar=True)
-        embeddings_np = np.array(embeddings)
+        # Generate embeddings using NIM
+        embeddings_np = _get_nim_embeddings(texts, input_type="passage")
         
         # Call database tool
         return add_to_database(chunks, embeddings_np)
@@ -167,12 +219,25 @@ def retrieve_context_tool(query: str) -> str:
     Returns a formatted string of results with page numbers and document names.
     """
     try:
-        # Generate query embedding using local model
-        query_embedding = embedding_model.encode([query])[0]
-        query_embedding = np.array(query_embedding)
+        # 1. Generate query embedding using NIM
+        query_embedding_np = _get_nim_embeddings([query], input_type="query")[0]
         
-        # Call database tool
-        results = search_database(query_embedding, k=5)
+        # 2. Initial Vector Search (Retrieve top 20 for reranking)
+        # We fetch more candidates because vector search is approximate
+        initial_k = 20
+        candidates = search_database(query_embedding_np, k=initial_k)
+        
+        if not candidates:
+            return "No relevant context found."
+            
+        # 3. Reranking (Refinement)
+        candidate_texts = [c['text'] for c in candidates]
+        ranked_indices = _rerank_documents(query, candidate_texts)
+        
+        # Select top 5 after reranking
+        final_top_k = 5
+        top_indices = ranked_indices[:final_top_k]
+        results = [candidates[i] for i in top_indices]
         
         if not results:
             return "No relevant context found."

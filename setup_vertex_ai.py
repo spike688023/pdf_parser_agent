@@ -42,12 +42,14 @@ def setup_vertex_resources():
         else:
             # Create new index
             # Note: We use a dummy embedding to initialize the index structure
-            # Dimensions: 384 (matching all-MiniLM-L6-v2)
-            # Create new index with Streaming Update enabled
-            # Brute force is suitable for < 1M vectors and provides 100% recall
-            my_index = aiplatform.MatchingEngineIndex.create_brute_force_index(
+            # Dimensions: 1024 (matching nvidia/llama-3.2-nv-embedqa-1b-v2)
+            # Distance measure: DOT_PRODUCT_DISTANCE (recommended for embeddings)
+            # Algorithm: TREE_AH_ALGORITHM (standard for ANN)
+            bucket_uri = f"gs://{bucket_name}/matching_engine_index_data"
+            my_index = aiplatform.MatchingEngineIndex.create_tree_ah_index(
                 display_name=index_display_name,
-                dimensions=384,
+                contents_delta_uri=bucket_uri,
+                dimensions=1024,
                 distance_measure_type="DOT_PRODUCT_DISTANCE",
                 description="Index for PDF Agent",
                 index_update_method="STREAM_UPDATE"

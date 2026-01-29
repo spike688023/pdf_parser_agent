@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embedding-nim
+  namespace: default
+  labels:
+    app: embedding-nim
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: embedding-nim
+  template:
+    metadata:
+      labels:
+        app: embedding-nim
+    spec:
+      imagePullSecrets:
+        - name: ngc-secret
+      containers:
+        - name: embedding-nim
+          # 使用 NVIDIA Llama-3.2-NV-EmbedQA-1B-v2 模型
+          image: nvcr.io/nim/nvidia/llama-3.2-nv-embedqa-1b-v2:1.0.0
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+          env:
+            - name: NIM_CACHE_PATH
+              value: "/opt/nim/.cache"
+          ports:
+            - containerPort: 8000
+              name: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: embedding-nim
+  namespace: default
+spec:
+  selector:
+    app: embedding-nim
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

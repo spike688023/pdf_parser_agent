@@ -35,9 +35,9 @@ def test_vector_search():
         print(f"   Endpoint: {vertex_store.index_endpoint_name}")
         print(f"   Deployed Index: {vertex_store.deployed_index_id}")
         
-        # Generate random query vector (384 dimensions for all-MiniLM-L6-v2)
-        print(f"\n🎲 Generating random query vector (384 dimensions)...")
-        query_vector = np.random.rand(384).astype('float32')
+        # Generate random query vector (1024 dimensions for nvidia/llama-3.2-nv-embedqa-1b-v2)
+        print(f"\n🎲 Generating random query vector (1024 dimensions)...")
+        query_vector = np.random.rand(1024).astype('float32')
         
         # Search for similar vectors
         print(f"🔎 Searching for top 10 similar vectors...")

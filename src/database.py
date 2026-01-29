@@ -19,7 +19,7 @@ retry_config = types.HttpRetryOptions(
 )
 
 class VectorStore:
-    def __init__(self, storage_dir: str = "storage", dimension: int = 384, session_id: str = None):
+    def __init__(self, storage_dir: str = "storage", dimension: int = 1024, session_id: str = None):
         self.storage_dir = storage_dir
         self.dimension = dimension
         self.session_id = session_id
