@@ -5,6 +5,15 @@
 # 設定 kubectl 路徑
 KUBECTL_CMD="/opt/homebrew/share/google-cloud-sdk/bin/kubectl"
 
+# 自動切換到 GKE Context (避免誤操作本地 Colima)
+GKE_CONTEXT="gke_gen-lang-client-0044574038_us-central1_pdf-agent-cluster"
+CURRENT_CONTEXT=$($KUBECTL_CMD config current-context)
+
+if [ "$CURRENT_CONTEXT" != "$GKE_CONTEXT" ]; then
+    echo "🔄 Switching kubectl context to GKE..."
+    $KUBECTL_CMD config use-context $GKE_CONTEXT
+fi
+
 echo "🛑 Stopping AI Services (Scale Down to 0)..."
 
 # 將所有 Deployment 的副本數設為 0

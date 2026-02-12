@@ -1,0 +1,10 @@
+[
+    {
+        "name": "projects/gen-lang-client-0044574038/locations/us-central1/repositories/pdf-agent-repo/cleanupPolicies/keep-recent-5",
+        "id": "keep-recent-5",
+        "action": "KEEP",
+        "mostRecentVersions": {
+            "keepCount": 5
+        }
+    }
+]

@@ -14,10 +14,8 @@ spec:
     spec:
       containers:
       - name: pdf-agent
-        # ⚠️ 注意: 這裡需要替換成你實際 push 到 Artifact Registry 的 image 路徑
-        # 例如: asia-east1-docker.pkg.dev/YOUR-PROJECT-ID/repo-name/pdf-agent:latest
-        image: pdf-agent:latest 
-        imagePullPolicy: IfNotPresent
+        image: us-central1-docker.pkg.dev/gen-lang-client-0044574038/pdf-agent-repo/pdf-agent:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8080
         env:
