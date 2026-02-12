@@ -2,8 +2,13 @@
 set -e
 
 # NVIDIA NGC 配置
+# NVIDIA NGC 配置
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+
 NGC_EMAIL="spike688023@gmail.com"
-NGC_API_KEY="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"
+# NGC_API_KEY is now loaded from .env
 DOCKER_SERVER="nvcr.io"
 DOCKER_USERNAME="\$oauthtoken" #這是固定的，不要改
 KUBECTL_CMD="/opt/homebrew/share/google-cloud-sdk/bin/kubectl"
