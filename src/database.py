@@ -38,24 +38,37 @@ class VectorStore:
                 print("⚠️  Falling back to local SQLite")
                 self.use_firestore = False
         
-        # Vertex AI Configuration
-        self.use_vertex_ai = os.getenv("USE_VERTEX_AI", "false").lower() == "true"
-        self.vertex_store = None
+        # Qdrant Configuration
+        # Default to False unless explicitly enabled or if QDRANT_URL is set
+        self.use_qdrant = os.getenv("USE_QDRANT", "false").lower() == "true" or os.getenv("QDRANT_URL") is not None
+        self.qdrant_client = None
         
-        if self.use_vertex_ai:
+        if self.use_qdrant:
             try:
-                from src.vertex_search import VertexVectorStore
-                self.vertex_store = VertexVectorStore(
-                    project_id=os.getenv("GOOGLE_CLOUD_PROJECT"),
-                    location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
-                    index_endpoint_name=os.getenv("VERTEX_INDEX_ENDPOINT_NAME"),
-                    deployed_index_id=os.getenv("VERTEX_DEPLOYED_INDEX_ID")
-                )
-                print("✅ Using Vertex AI Vector Search")
+                from qdrant_client import QdrantClient
+                from qdrant_client.http import models
+                
+                url = os.getenv("QDRANT_URL", "http://qdrant:6333")
+                api_key = os.getenv("QDRANT_API_KEY") # Optional
+                
+                self.qdrant_client = QdrantClient(url=url, api_key=api_key)
+                
+                # Create collection if not exists
+                collection_name = "pdf_rag"
+                if not self.qdrant_client.collection_exists(collection_name):
+                    self.qdrant_client.create_collection(
+                        collection_name=collection_name,
+                        vectors_config=models.VectorParams(
+                            size=self.dimension,
+                            distance=models.Distance.DOT
+                        )
+                    )
+                
+                print(f"✅ Using Qdrant Vector DB at {url}")
             except Exception as e:
-                print(f"❌ Failed to initialize Vertex AI: {e}")
+                print(f"❌ Failed to initialize Qdrant: {e}")
                 print("⚠️  Falling back to local FAISS")
-                self.use_vertex_ai = False
+                self.use_qdrant = False
         
         # Use session-specific database if session_id is provided
         if session_id:
@@ -142,9 +155,27 @@ class VectorStore:
                 inserted_ids.append(str(cursor.lastrowid))
             self.conn.commit()
         
-        # Add to Vertex AI if enabled
-        if self.use_vertex_ai and self.vertex_store:
-            self.vertex_store.add_items(inserted_ids, embeddings)
+        # Add to Qdrant if enabled
+        if self.use_qdrant and self.qdrant_client:
+            try:
+                from qdrant_client.http import models
+                points = []
+                for i, embedding in enumerate(embeddings):
+                    # Combine original item dict with document metadata for payload
+                    payload = items[i].copy()
+                    
+                    points.append(models.PointStruct(
+                        id=str(inserted_ids[i]) if inserted_ids else str(i), # Use DB ID or index
+                        vector=embedding.tolist(),
+                        payload=payload
+                    ))
+                
+                self.qdrant_client.upsert(
+                    collection_name="pdf_rag",
+                    points=points
+                )
+            except Exception as e:
+                print(f"⚠️ Failed to add to Qdrant: {e}")
         
         # Always add to local FAISS as backup/fallback
         self.index.add(embeddings.astype('float32'))
@@ -153,44 +184,29 @@ class VectorStore:
     def search(self, query_embedding: np.ndarray, k: int = 5) -> List[Dict[str, Any]]:
         results = []
         
-        # Try Vertex AI Search first
-        if self.use_vertex_ai and self.vertex_store:
+        # Try Qdrant Search first
+        if self.use_qdrant and self.qdrant_client:
             try:
-                vertex_results = self.vertex_store.search(query_embedding, k)
-                chunk_ids = [res["id"] for res in vertex_results]
+                search_result = self.qdrant_client.search(
+                    collection_name="pdf_rag",
+                    query_vector=query_embedding.tolist(), # Convert to list for Qdrant
+                    limit=k
+                )
                 
-                # Retrieve chunk text from Firestore or SQLite
-                if self.use_firestore and self.firestore_db:
-                    chunks = self.firestore_db.get_chunks_by_ids(chunk_ids)
-                    for i, chunk in enumerate(chunks):
-                        results.append({
-                            "text": chunk.get("text", ""),
-                            "page_number": chunk.get("page_number", 0),
-                            "source": chunk.get("source", ""),
-                            "document_id": chunk.get("document_id", ""),
-                            "document_name": chunk.get("document_name", ""),
-                            "tags": chunk.get("tags", ""),
-                            "distance": float(vertex_results[i]["distance"])
-                        })
-                else:
-                    cursor = self.conn.cursor()
-                    for res in vertex_results:
-                        chunk_id = int(res["id"])
-                        cursor.execute("SELECT text, page_number, source, document_id, document_name, tags FROM chunks WHERE id = ?", (chunk_id,))
-                        row = cursor.fetchone()
-                        if row:
-                            results.append({
-                                "text": row[0],
-                                "page_number": row[1],
-                                "source": row[2],
-                                "document_id": row[3],
-                                "document_name": row[4],
-                                "tags": row[5],
-                                "distance": float(res["distance"])
-                            })
+                for hit in search_result:
+                    payload = hit.payload
+                    results.append({
+                        "text": payload.get("text", ""),
+                        "page_number": payload.get("page_number", 0),
+                        "source": payload.get("source", ""),
+                        "document_id": payload.get("document_id", ""),
+                        "document_name": payload.get("document_name", ""),
+                        "tags": payload.get("tags", ""),
+                        "distance": hit.score # Qdrant returns score (higher is better for DOT)
+                    })
                 return results
             except Exception as e:
-                print(f"⚠️ Vertex AI search failed: {e}. Falling back to local FAISS.")
+                print(f"⚠️ Qdrant search failed: {e}. Falling back to local FAISS.")
                 # Fallback to local FAISS
         
         # Local FAISS Search

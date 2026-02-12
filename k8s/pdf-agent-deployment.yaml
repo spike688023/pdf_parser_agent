@@ -26,6 +26,11 @@ spec:
           value: "http://nim-embedding:8000/v1/embeddings"
         - name: RERANKING_SERVICE_URL
           value: "http://nim-reranking:8000/v1/ranking"
+        # Qdrant 設定
+        - name: USE_QDRANT
+          value: "true"
+        - name: QDRANT_URL
+          value: "http://qdrant:6333"
         # 確保 Streamlit 使用 8080 port
         - name: PORT
           value: "8080"

@@ -10,5 +10,5 @@ aiohttp
 google-genai
 google-adk
 google-cloud-storage
-google-cloud-aiplatform
+qdrant-client
 google-cloud-firestore
