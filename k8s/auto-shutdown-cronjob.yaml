@@ -26,7 +26,7 @@ spec:
               
               # 停止 AI 服務
               kubectl scale deployment embedding-nim --replicas=0 || true
-              kubectl scale deployment reranking-nim --replicas=0 || true
+              # Reranking now uses Gemini API (no deployment to scale down)
               kubectl scale deployment qdrant --replicas=0 || true
               kubectl scale deployment pdf-agent --replicas=0 || true
               

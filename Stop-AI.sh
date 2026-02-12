@@ -19,16 +19,15 @@ echo "🛑 Stopping AI Services (Scale Down to 0)..."
 # 將所有 Deployment 的副本數設為 0
 # 這樣 Pod 會被刪除，GKE Autopilot 會自動釋放背後的 Node (停止計費)
 
-echo "Hx Scaling down Embedding NIM..."
+echo "⬇️ Scaling down Embedding NIM..."
 $KUBECTL_CMD scale deployment embedding-nim --replicas=0
 
-echo "Hx Scaling down Reranking NIM..."
-$KUBECTL_CMD scale deployment reranking-nim --replicas=0
+# Reranking now uses Gemini API (no deployment to scale down)
 
-echo "Hx Scaling down Qdrant DB..."
+echo "⬇️ Scaling down Qdrant DB..."
 $KUBECTL_CMD scale deployment qdrant --replicas=0
 
-echo "Hx Scaling down PDF Agent Web App..."
+echo "⬇️ Scaling down PDF Agent Web App..."
 $KUBECTL_CMD scale deployment pdf-agent --replicas=0
 
 echo "✅ All services stopped!"

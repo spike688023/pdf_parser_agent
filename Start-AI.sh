@@ -21,8 +21,7 @@ echo "🚀 Starting AI Services (Scale Up)..."
 echo "📈 Scaling up Embedding NIM..."
 $KUBECTL_CMD scale deployment embedding-nim --replicas=1 || true
 
-echo "📈 Scaling up Reranking NIM..."
-$KUBECTL_CMD scale deployment reranking-nim --replicas=1 || true
+# Reranking now uses Gemini API (no deployment needed)
 
 echo "📈 Scaling up Qdrant DB..."
 $KUBECTL_CMD scale deployment qdrant --replicas=1 || true

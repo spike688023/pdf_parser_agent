@@ -31,9 +31,8 @@ retry_config = types.HttpRetryOptions(
 
 # NIM Configuration
 EMBEDDING_SERVICE_URL = os.getenv("EMBEDDING_SERVICE_URL", "http://nim-embedding:8000/v1/embeddings")
-RERANKING_SERVICE_URL = os.getenv("RERANKING_SERVICE_URL", "http://nim-reranking:8000/v1/ranking")
 EMBEDDING_MODEL_NAME = "nvidia/llama-3.2-nv-embedqa-1b-v2"
-RERANKING_MODEL_NAME = "nvidia/llama-3.2-nv-rerankqa-1b-v2"
+# Reranking now uses Gemini API (configured via GOOGLE_API_KEY env var)
 
 def _get_nim_embeddings(texts: List[str], input_type: str = "passage") -> np.ndarray:
     """Call NVIDIA Embedding NIM service."""
@@ -63,29 +62,49 @@ def _get_nim_embeddings(texts: List[str], input_type: str = "passage") -> np.nda
 
 def _rerank_documents(query: str, documents: List[str]) -> List[int]:
     """
-    Call NVIDIA Reranking NIM service.
+    Use Gemini API to rerank documents by semantic similarity.
     Returns list of indices sorted by relevance (most relevant first).
     """
     if not documents:
         return []
-        
-    payload = {
-        "model": RERANKING_MODEL_NAME,
-        "query": {"text": query},
-        "documents": [{"text": doc} for doc in documents]
-    }
     
     try:
-        response = requests.post(RERANKING_SERVICE_URL, json=payload, timeout=30)
-        response.raise_for_status()
-        data = response.json()
+        import google.generativeai as genai
         
-        # Extract rankings
-        # Response format: {"rankings": [{"index": 0, "logit": 0.9}, ...]}
-        rankings = data.get("rankings", [])
-        return [r["index"] for r in rankings]
+        # Configure Gemini API
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        
+        # Create reranking prompt
+        docs_text = "\n\n".join([f"Document {i}: {doc}" for i, doc in enumerate(documents)])
+        prompt = f"""Given the following query and documents, rank the documents by relevance to the query.
+Return ONLY a comma-separated list of document indices (0-based) in order of relevance (most relevant first).
+
+Query: {query}
+
+{docs_text}
+
+Ranking (indices only, comma-separated):"""
+        
+        # Call Gemini API
+        response = model.generate_content(prompt)
+        result_text = response.text.strip()
+        
+        # Parse the response (expected format: "2,0,1,3")
+        try:
+            indices = [int(idx.strip()) for idx in result_text.split(',')]
+            # Validate indices
+            if set(indices) == set(range(len(documents))):
+                return indices
+        except:
+            pass
+        
+        # Fallback: return original order
+        print(f"Warning: Gemini reranking failed to parse. Returning original order.")
+        return list(range(len(documents)))
+        
     except Exception as e:
-        print(f"Warning: Reranking NIM failed ({e}). Returning original order.")
+        print(f"Warning: Gemini reranking failed ({e}). Returning original order.")
         return list(range(len(documents)))
 
 # ======== RAG Tools ========
