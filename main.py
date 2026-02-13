@@ -79,9 +79,8 @@ async def auto_save_to_memory(callback_context: CallbackContext):
 
     # Use a temporary/default session for ingestion as it doesn't need long-term history
     # But we still need a session service for the Runner
-    db_url = "sqlite:///storage/sessions.db"
-    if not os.path.exists("storage"):
-        os.makedirs("storage")
+    from src.database import get_session_db_url
+    db_url = get_session_db_url()
         
     session_service = DatabaseSessionService(db_url=db_url)
     
@@ -99,11 +98,8 @@ async def run_qa(initial_question: str, api_key: str, session_id: str = "default
     
     qa_agent = create_qa_agent()
     
-    # Ensure storage directory exists
-    if not os.path.exists("storage"):
-        os.makedirs("storage")
-        
-    db_url = "sqlite:///storage/sessions.db"
+    from src.database import get_session_db_url
+    db_url = get_session_db_url()
     session_service = DatabaseSessionService(db_url=db_url)
     
     runner = Runner(

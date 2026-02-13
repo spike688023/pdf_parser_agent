@@ -226,15 +226,9 @@ if st.session_state.documents:
             with st.chat_message("assistant"):
                 # Generator for streaming response
                 async def run_agent_stream():
-                    # Use environment variable for DB path to support absolute paths in K8s
-                    db_path = os.getenv("DB_PATH", "storage/sessions.db")
-                    # Handle absolute path correctly for sqlite URL (needs 4 slashes if absolute)
-                    if db_path.startswith("/"): 
-                        db_url = f"sqlite:///{db_path}"
-                    else:
-                        db_url = f"sqlite:///{db_path}"
-
-                    session_service = DatabaseSessionService(db_url=db_url)
+                    from src.database import get_session_db_url
+                    session_service = DatabaseSessionService(db_url=get_session_db_url())
+                    
                     # Ensure session exists
                     try:
                         await session_service.create_session(

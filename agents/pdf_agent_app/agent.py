@@ -17,7 +17,8 @@ load_dotenv()
 
 # Initialize Session Service
 # We use the same database as main.py for consistency
-session_service = DatabaseSessionService(db_url="sqlite:///storage/sessions.db")
+from src.database import get_session_db_url
+session_service = DatabaseSessionService(db_url=get_session_db_url())
 
 # Create the agent
 # We assign it to root_agent as expected by ADK Web UI

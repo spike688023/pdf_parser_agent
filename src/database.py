@@ -18,9 +18,39 @@ retry_config = types.HttpRetryOptions(
     http_status_codes=[429, 500, 503, 504]
 )
 
+def get_storage_dir():
+    """Get absolute path to storage directory."""
+    # 1. Try env var
+    env_path = os.getenv("STORAGE_DIR")
+    if env_path:
+        return env_path
+        
+    # 2. Use project_root/storage
+    # __file__ = src/database.py
+    # dirname = src/
+    # dirname = project_root/
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_dir, "storage")
+
+def get_session_db_url(session_id: str = None) -> str:
+    """Get SQLite URL for session database."""
+    storage_dir = get_storage_dir()
+    if not os.path.exists(storage_dir):
+        os.makedirs(storage_dir, exist_ok=True)
+        
+    if session_id:
+        # This is strictly for metadata per session (if split)
+        db_path = os.path.join(storage_dir, f"{session_id}_metadata.db")
+    else:
+        # Default session management DB
+        db_path = os.path.join(storage_dir, "sessions.db")
+        
+    return f"sqlite:///{db_path}"
+
 class VectorStore:
-    def __init__(self, storage_dir: str = "storage", dimension: int = 1024, session_id: str = None):
-        self.storage_dir = storage_dir
+    def __init__(self, storage_dir: str = None, dimension: int = 1024, session_id: str = None):
+        # Use centralized logic for storage dir
+        self.storage_dir = storage_dir if storage_dir else get_storage_dir()
         self.dimension = dimension
         self.session_id = session_id
         
