@@ -30,6 +30,8 @@ spec:
             secretKeyRef:
               name: google-api-key
               key: GOOGLE_API_KEY
+        - name: DB_PATH
+          value: "/app/storage/sessions.db"
         # Qdrant 設定
         - name: USE_QDRANT
           value: "true"
@@ -43,10 +45,16 @@ spec:
         resources:
           requests:
             cpu: "500m"
-            memory: "1Gi"
+            memory: "2Gi"
           limits:
             cpu: "1000m"
-            memory: "2Gi"
+            memory: "4Gi"
+        volumeMounts:
+        - name: storage-volume
+          mountPath: /app/storage
+      volumes:
+      - name: storage-volume
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
