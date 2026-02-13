@@ -6,6 +6,8 @@ metadata:
     app: embedding-nim
 spec:
   replicas: 1
+  strategy:
+    type: Recreate  # GPU 資源有限，避免 rolling update 死鎖
   selector:
     matchLabels:
       app: embedding-nim
@@ -14,6 +16,8 @@ spec:
       labels:
         app: embedding-nim
     spec:
+      imagePullSecrets:
+      - name: ngc-secret
       containers:
       - name: embedding-nim
         # 使用 NVIDIA 官方提供的 Embedding NIM Image
@@ -26,11 +30,21 @@ spec:
             secretKeyRef:
               name: ngc-api-key # 我們需要建立這個 Secret
               key: NGC_API_KEY
+        - name: NIM_LOG_LEVEL
+          value: "DEBUG"
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
         resources:
           limits:
             nvidia.com/gpu: 1 # 必須要有 GPU
           requests:
             nvidia.com/gpu: 1
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 2Gi  # 設定 shared memory 大小
       nodeSelector:
         cloud.google.com/gke-accelerator: nvidia-tesla-t4
 ---
