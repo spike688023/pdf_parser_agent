@@ -45,7 +45,7 @@ def get_session_db_url(session_id: str = None) -> str:
         # Default session management DB
         db_path = os.path.join(storage_dir, "sessions.db")
         
-    return f"sqlite:///{db_path}"
+    return f"sqlite+aiosqlite:///{db_path}"
 
 class VectorStore:
     def __init__(self, storage_dir: str = None, dimension: int = 1024, session_id: str = None):
