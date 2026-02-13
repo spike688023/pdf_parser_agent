@@ -34,31 +34,48 @@ EMBEDDING_SERVICE_URL = os.getenv("EMBEDDING_SERVICE_URL", "http://nim-embedding
 EMBEDDING_MODEL_NAME = "nvidia/llama-3.2-nv-embedqa-1b-v2"
 # Reranking now uses Gemini API (configured via GOOGLE_API_KEY env var)
 
-def _get_nim_embeddings(texts: List[str], input_type: str = "passage") -> np.ndarray:
-    """Call NVIDIA Embedding NIM service."""
+def _get_nim_embeddings(texts: List[str], input_type: str = "passage", batch_size: int = 32) -> np.ndarray:
+    """
+    Call NVIDIA Embedding NIM service with batch processing.
+    
+    Args:
+        texts: List of strings to embed
+        input_type: "passage" or "query"
+        batch_size: Number of texts to send in a single API call (default: 32)
+    """
     if not texts:
         return np.array([])
         
-    payload = {
-        "input": texts,
-        "model": EMBEDDING_MODEL_NAME,
-        "input_type": input_type,
-        "encoding_format": "float"
-    }
+    all_embeddings = []
     
-    try:
-        response = requests.post(EMBEDDING_SERVICE_URL, json=payload, timeout=30)
-        response.raise_for_status()
-        data = response.json()
+    # Process in batches
+    for i in range(0, len(texts), batch_size):
+        batch_texts = texts[i : i + batch_size]
         
-        # Ensure correct ordering based on index
-        embeddings_data = sorted(data.get("data", []), key=lambda x: x["index"])
-        embeddings = [item["embedding"] for item in embeddings_data]
-        return np.array(embeddings)
-    except Exception as e:
-        print(f"Error calling Embedding NIM: {e}")
-        # Fallback or empty? Raising error is better to fail fast
-        raise e
+        payload = {
+            "input": batch_texts,
+            "model": EMBEDDING_MODEL_NAME,
+            "input_type": input_type,
+            "encoding_format": "float"
+        }
+        
+        try:
+            # Increased timeout for larger batches
+            response = requests.post(EMBEDDING_SERVICE_URL, json=payload, timeout=60)
+            response.raise_for_status()
+            data = response.json()
+            
+            # Ensure correct ordering within the batch based on index
+            embeddings_data = sorted(data.get("data", []), key=lambda x: x["index"])
+            batch_embeddings = [item["embedding"] for item in embeddings_data]
+            all_embeddings.extend(batch_embeddings)
+            
+        except Exception as e:
+            print(f"Error calling Embedding NIM (Batch {i//batch_size + 1}): {e}")
+            # If a batch fails, we should probably fail the whole process or implement retry
+            raise e
+            
+    return np.array(all_embeddings)
 
 def _rerank_documents(query: str, documents: List[str]) -> List[int]:
     """
