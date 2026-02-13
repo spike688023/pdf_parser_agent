@@ -105,7 +105,7 @@ tests/
 # 設定專案 ID
 PROJECT_ID="gen-lang-client-0044574038"
 IMAGE_NAME="pdf-qa-agent"
-REGION="us-west1"
+REGION="us-east1"
 
 # 構建映像
 gcloud builds submit --tag gcr.io/${PROJECT_ID}/${IMAGE_NAME}
@@ -129,10 +129,10 @@ gcloud run deploy pdf-qa-agent \
   --set-env-vars "GOOGLE_API_KEY=${GOOGLE_API_KEY}" \
   --set-env-vars "GCS_BUCKET_NAME=my-pdf-files__spike688023" \
   --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT_ID}" \
-  --set-env-vars "GOOGLE_CLOUD_LOCATION=us-west1" \
+  --set-env-vars "GOOGLE_CLOUD_LOCATION=us-east1" \
   --set-env-vars "USE_VERTEX_AI=true" \
   --set-env-vars "USE_FIRESTORE=true" \
-  --set-env-vars "VERTEX_INDEX_ENDPOINT_NAME=projects/780224666367/locations/us-west1/indexEndpoints/1853446750942003200" \
+  --set-env-vars "VERTEX_INDEX_ENDPOINT_NAME=projects/780224666367/locations/us-east1/indexEndpoints/1853446750942003200" \
   --set-env-vars "VERTEX_DEPLOYED_INDEX_ID=pdf_agent_deployed_index" \
   --service-account pdf-agent-sa@${PROJECT_ID}.iam.gserviceaccount.com
 ```
@@ -154,7 +154,7 @@ gcloud run services describe pdf-qa-agent \
 
 ```bash
 gcloud compute instances create pdf-qa-agent-vm \
-  --zone=us-west1-a \
+  --zone=us-east1-a \
   --machine-type=e2-standard-2 \
   --image-family=debian-11 \
   --image-project=debian-cloud \
@@ -167,7 +167,7 @@ gcloud compute instances create pdf-qa-agent-vm \
 
 ```bash
 # SSH 連接
-gcloud compute ssh pdf-qa-agent-vm --zone=us-west1-a
+gcloud compute ssh pdf-qa-agent-vm --zone=us-east1-a
 
 # 安裝 Python 和依賴
 sudo apt-get update
@@ -230,10 +230,10 @@ gcloud compute firewall-rules create allow-streamlit \
 GOOGLE_API_KEY="your-gemini-api-key"
 GCS_BUCKET_NAME="my-pdf-files__spike688023"
 GOOGLE_CLOUD_PROJECT="gen-lang-client-0044574038"
-GOOGLE_CLOUD_LOCATION="us-west1"
+GOOGLE_CLOUD_LOCATION="us-east1"
 USE_VERTEX_AI="true"
 USE_FIRESTORE="true"
-VERTEX_INDEX_ENDPOINT_NAME="projects/780224666367/locations/us-west1/indexEndpoints/1853446750942003200"
+VERTEX_INDEX_ENDPOINT_NAME="projects/780224666367/locations/us-east1/indexEndpoints/1853446750942003200"
 VERTEX_DEPLOYED_INDEX_ID="pdf_agent_deployed_index"
 FIRESTORE_DATABASE="(default)"
 ```
@@ -280,7 +280,7 @@ curl http://VM_EXTERNAL_IP:8501/_stcore/health
 
 ```bash
 # Cloud Run
-gcloud run services logs read pdf-qa-agent --region=us-west1
+gcloud run services logs read pdf-qa-agent --region=us-east1
 
 # Compute Engine
 sudo journalctl -u pdf-qa-agent -f
@@ -326,7 +326,7 @@ python scripts/check_container.py --verbose --show-logs
 # 增加最小實例數
 gcloud run services update pdf-qa-agent \
   --min-instances=1 \
-  --region=us-west1
+  --region=us-east1
 ```
 
 ### 問題 2: 端口配置錯誤 (Port 8080 vs 8501)
@@ -349,7 +349,7 @@ CMD streamlit run app.py --server.port=${PORT:-8080} --server.address=0.0.0.0
 # 增加記憶體
 gcloud run services update pdf-qa-agent \
   --memory=4Gi \
-  --region=us-west1
+  --region=us-east1
 ```
 
 ### 問題 4: Vertex AI 連接失敗
@@ -363,7 +363,7 @@ gcloud run services update pdf-qa-agent \
 
 ```bash
 # 檢查部署狀態
-gcloud ai index-endpoints describe 1853446750942003200 --region=us-west1
+gcloud ai index-endpoints describe 1853446750942003200 --region=us-east1
 ```
 
 ### 問題 5: Firestore 權限錯誤

@@ -6,7 +6,7 @@
 KUBECTL_CMD="/opt/homebrew/share/google-cloud-sdk/bin/kubectl"
 
 # 自動切換到 GKE Context
-GKE_CONTEXT="gke_gen-lang-client-0044574038_us-central1_pdf-agent-cluster"
+GKE_CONTEXT="gke_gen-lang-client-0044574038_us-east1_pdf-agent-cluster"
 CURRENT_CONTEXT=$($KUBECTL_CMD config current-context)
 
 if [ "$CURRENT_CONTEXT" != "$GKE_CONTEXT" ]; then

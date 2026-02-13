@@ -24,9 +24,9 @@ from datetime import datetime
 
 # 設定
 SERVICE_NAME = "pdf-qa-agent"
-REGION = "us-west1"
+REGION = "us-east1"
 PROJECT_ID = "gen-lang-client-0044574038"
-SERVICE_URL = "https://pdf-qa-agent-780224666367.us-west1.run.app"
+SERVICE_URL = "https://pdf-qa-agent-780224666367.us-east1.run.app"
 TIMEOUT = 60  # 秒
 
 # 顏色輸出

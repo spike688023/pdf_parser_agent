@@ -40,6 +40,13 @@ spec:
               
               echo "✅ Monitoring services scaled down to 0"
               echo "💰 All services stopped! GPU nodes and monitoring pods released."
+            resources:
+              requests:
+                cpu: "100m"
+                memory: "128Mi"
+              limits:
+                cpu: "200m"
+                memory: "256Mi"
 ---
 # ServiceAccount: 給 CronJob 權限去操作 Deployment
 apiVersion: v1

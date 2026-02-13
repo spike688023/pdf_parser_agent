@@ -47,13 +47,13 @@ GOOGLE_APPLICATION_CREDENTIALS=/Users/linspike/gcp-keys/pdf-agent-key.json
 
 # Google Cloud Project Configuration
 GOOGLE_CLOUD_PROJECT=your-project-id
-GOOGLE_CLOUD_LOCATION=us-central1
+GOOGLE_CLOUD_LOCATION=us-east1
 ```
 
 **重要：** 
 - 將 `GOOGLE_APPLICATION_CREDENTIALS` 路徑改為你實際儲存 JSON 金鑰的位置
 - 將 `GOOGLE_CLOUD_PROJECT` 改為你的 GCP 專案 ID
-- 將 `GOOGLE_CLOUD_LOCATION` 改為你的 bucket 所在區域（如果不確定，可以保持 `us-central1`）
+- 將 `GOOGLE_CLOUD_LOCATION` 改為你的 bucket 所在區域（如果不確定，可以保持 `us-east1`）
 
 #### 3. 安裝依賴
 
@@ -113,7 +113,7 @@ gcloud auth application-default login
 GOOGLE_API_KEY=your_google_api_key_here
 GCS_BUCKET_NAME=my-pdf-files__spike688023
 GOOGLE_CLOUD_PROJECT=your-project-id
-GOOGLE_CLOUD_LOCATION=us-central1
+GOOGLE_CLOUD_LOCATION=us-east1
 ```
 
 #### 3. 確保你的帳號有權限

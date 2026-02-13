@@ -166,7 +166,7 @@ GOOGLE_GENAI_USE_VERTEXAI=1
 ```bash
 # 設定環境變數
 export PROJECT_ID="your-project-id"
-export REGION="us-central1"
+export REGION="us-east1"
 
 # 部署
 adk deploy agent_engine \

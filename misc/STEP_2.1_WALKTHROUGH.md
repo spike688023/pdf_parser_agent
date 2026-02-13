@@ -177,7 +177,7 @@ GOOGLE_APPLICATION_CREDENTIALS=/Users/linspike/gcp-keys/pdf-agent-key.json
 
 # GCP Project
 GOOGLE_CLOUD_PROJECT=gen-lang-client-0044574038
-GOOGLE_CLOUD_LOCATION=us-west1
+GOOGLE_CLOUD_LOCATION=us-east1
 ```
 
 ### Files Modified

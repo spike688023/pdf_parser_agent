@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: pdf-agent
-        image: us-central1-docker.pkg.dev/gen-lang-client-0044574038/pdf-agent-repo/pdf-agent:latest
+        image: us-east1-docker.pkg.dev/gen-lang-client-0044574038/pdf-agent-repo/pdf-agent:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

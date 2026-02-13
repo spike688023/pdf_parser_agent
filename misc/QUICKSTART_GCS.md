@@ -45,7 +45,7 @@ GOOGLE_APPLICATION_CREDENTIALS=/Users/linspike/gcp-keys/pdf-agent-key.json
 
 # Google Cloud Project Configuration
 GOOGLE_CLOUD_PROJECT=你的專案ID
-GOOGLE_CLOUD_LOCATION=us-central1
+GOOGLE_CLOUD_LOCATION=us-east1
 ```
 
 **重要：** 

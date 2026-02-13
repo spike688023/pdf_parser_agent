@@ -141,15 +141,15 @@ crontab -e
 # 建立 Cloud Scheduler Job
 gcloud scheduler jobs create http keep-container-alive \
   --schedule="*/10 * * * *" \
-  --uri="https://pdf-qa-agent-780224666367.us-west1.run.app" \
+  --uri="https://pdf-qa-agent-780224666367.us-east1.run.app" \
   --http-method=GET \
-  --location=us-west1
+  --location=us-east1
 
 # 查看 Job 狀態
-gcloud scheduler jobs describe keep-container-alive --location=us-west1
+gcloud scheduler jobs describe keep-container-alive --location=us-east1
 
 # 手動執行測試
-gcloud scheduler jobs run keep-container-alive --location=us-west1
+gcloud scheduler jobs run keep-container-alive --location=us-east1
 ```
 
 **優點**：
@@ -222,7 +222,7 @@ grep "$(date +%Y-%m-%d)" logs/container_check.log
 python scripts/check_container.py --show-logs
 
 # 或直接使用 gcloud
-gcloud run services logs read pdf-qa-agent --region=us-west1 --limit=50
+gcloud run services logs read pdf-qa-agent --region=us-east1 --limit=50
 ```
 
 ---
@@ -236,10 +236,10 @@ gcloud run services logs read pdf-qa-agent --region=us-west1 --limit=50
 python scripts/check_container.py --verbose --show-logs
 
 # 2. 檢查服務配置
-gcloud run services describe pdf-qa-agent --region=us-west1
+gcloud run services describe pdf-qa-agent --region=us-east1
 
 # 3. 查看最近的錯誤
-gcloud run services logs read pdf-qa-agent --region=us-west1 --limit=100 | grep ERROR
+gcloud run services logs read pdf-qa-agent --region=us-east1 --limit=100 | grep ERROR
 ```
 
 ### 健康檢查超時

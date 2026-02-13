@@ -19,7 +19,7 @@ class TestVertexVectorStore(unittest.TestCase):
     def setUp(self, mock_aiplatform):
         self.mock_aiplatform = mock_aiplatform
         self.project_id = "test-project"
-        self.location = "us-central1"
+        self.location = "us-east1"
         self.index_endpoint_name = "projects/p/locations/l/indexEndpoints/ie"
         self.deployed_index_id = "test_index"
         

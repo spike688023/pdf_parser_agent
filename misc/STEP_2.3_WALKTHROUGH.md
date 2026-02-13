@@ -37,7 +37,7 @@ We have successfully implemented the integration with Google Cloud Firestore for
 1. Go to [Google Cloud Console > Firestore](https://console.cloud.google.com/firestore)
 2. Click **Create Database**
 3. Select **Native Mode** (recommended)
-4. Choose a location (same as your other resources, e.g., `us-west1`)
+4. Choose a location (same as your other resources, e.g., `us-east1`)
 5. Click **Create**
 
 ### Step 2: Update Configuration

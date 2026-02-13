@@ -112,10 +112,10 @@ GOOGLE_API_KEY=your_gemini_api_key_here
 
 ```bash
 # 建置新的 Image (包含 Gemini API 的程式碼)
-docker build -t us-central1-docker.pkg.dev/gen-lang-client-0044574038/pdf-agent-repo/pdf-agent:latest .
+docker build -t us-east1-docker.pkg.dev/gen-lang-client-0044574038/pdf-agent-repo/pdf-agent:latest .
 
 # 推送到 Artifact Registry
-docker push us-central1-docker.pkg.dev/gen-lang-client-0044574038/pdf-agent-repo/pdf-agent:latest
+docker push us-east1-docker.pkg.dev/gen-lang-client-0044574038/pdf-agent-repo/pdf-agent:latest
 ```
 
 ### 3. 部署到 GKE
@@ -150,14 +150,14 @@ kubectl get pods
 
 ```
 需求: 2 顆 T4 GPU (embedding + reranking)
-us-central1 配額: 1 顆 ❌ (不夠！)
+us-east1 配額: 1 顆 ❌ (不夠！)
 ```
 
 ### 現在
 
 ```
 需求: 1 顆 T4 GPU (只有 embedding)
-us-central1 配額: 1 顆 ✅ (剛好！)
+us-east1 配額: 1 顆 ✅ (剛好！)
 ```
 
 **不需要再申請增加配額了！** 🎉
