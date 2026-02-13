@@ -228,11 +228,25 @@ class VectorStore:
                         payload=payload
                     ))
                 
-                self.qdrant_client.upsert(
-                    collection_name="pdf_rag",
-                    points=points
-                )
-                print(f"Successfully upserted {len(points)} points to Qdrant.")
+                # Batch upsert to avoid payload size limit error (32MB)
+                batch_size = 50
+                total_batches = (len(points) + batch_size - 1) // batch_size
+                
+                print(f"Upserting {len(points)} points in {total_batches} batches...")
+                
+                for i in range(0, len(points), batch_size):
+                    batch = points[i:i + batch_size]
+                    try:
+                        self.qdrant_client.upsert(
+                            collection_name="pdf_rag",
+                            points=batch
+                        )
+                        print(f"  - Batch {i//batch_size + 1}/{total_batches} upserted successfully.")
+                    except Exception as batch_error:
+                        print(f"  ⚠️ Error upserting batch {i//batch_size + 1}: {batch_error}")
+                        # Continue with other batches even if one fails
+                        
+                print(f"Finished upserting {len(points)} points to Qdrant.")
             except Exception as e:
                 print(f"⚠️ Failed to add to Qdrant: {e}")
                 import traceback
