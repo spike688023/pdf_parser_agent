@@ -189,13 +189,41 @@ class VectorStore:
         if self.use_qdrant and self.qdrant_client:
             try:
                 from qdrant_client.http import models
+                import uuid
+
+                # Log embedding dimension for debugging
+                if len(embeddings) > 0:
+                    print(f"DEBUG: Embedding dimension: {len(embeddings[0])}")
+
                 points = []
                 for i, embedding in enumerate(embeddings):
                     # Combine original item dict with document metadata for payload
                     payload = items[i].copy()
                     
+                    # Determine ID: Use SQLite/Firestore ID if available, else generate UUID
+                    point_id = None
+                    if inserted_ids:
+                        raw_id = inserted_ids[i]
+                        # Check if it looks like an integer (SQLite ROWID)
+                        if isinstance(raw_id, int) or (isinstance(raw_id, str) and raw_id.isdigit()):
+                            point_id = int(raw_id)
+                        else:
+                            # Try to use as UUID string, or generate new UUID if not compatible
+                            try:
+                                # Validate if it's a UUID
+                                uuid.UUID(str(raw_id))
+                                point_id = str(raw_id)
+                            except ValueError:
+                                # Not a UUID, allow Qdrant/Client to generate or hash it? 
+                                # For simplicity, let's generate a new UUID for Qdrant and store mapping in payload
+                                point_id = str(uuid.uuid4())
+                                payload["original_db_id"] = str(raw_id)
+                    else:
+                        # No DB ID, use UUID
+                        point_id = str(uuid.uuid4())
+
                     points.append(models.PointStruct(
-                        id=str(inserted_ids[i]) if inserted_ids else str(i), # Use DB ID or index
+                        id=point_id,
                         vector=embedding.tolist(),
                         payload=payload
                     ))
@@ -204,9 +232,12 @@ class VectorStore:
                     collection_name="pdf_rag",
                     points=points
                 )
+                print(f"Successfully upserted {len(points)} points to Qdrant.")
             except Exception as e:
                 print(f"⚠️ Failed to add to Qdrant: {e}")
-        
+                import traceback
+                traceback.print_exc()
+
         # Always add to local FAISS as backup/fallback
         self.index.add(embeddings.astype('float32'))
         self.save_index()
