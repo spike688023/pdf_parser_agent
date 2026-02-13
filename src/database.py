@@ -102,15 +102,15 @@ class VectorStore:
         
         # Use session-specific database if session_id is provided
         if session_id:
-            self.db_path = os.path.join(storage_dir, f"{session_id}_metadata.db")
-            self.index_path = os.path.join(storage_dir, f"{session_id}_faiss.index")
+            self.db_path = os.path.join(self.storage_dir, f"{session_id}_metadata.db")
+            self.index_path = os.path.join(self.storage_dir, f"{session_id}_faiss.index")
         else:
             # Fallback to global database (for backward compatibility)
-            self.db_path = os.path.join(storage_dir, "metadata.db")
-            self.index_path = os.path.join(storage_dir, "faiss.index")
+            self.db_path = os.path.join(self.storage_dir, "metadata.db")
+            self.index_path = os.path.join(self.storage_dir, "faiss.index")
         
-        if not os.path.exists(storage_dir):
-            os.makedirs(storage_dir)
+        if not os.path.exists(self.storage_dir):
+            os.makedirs(self.storage_dir)
             
         # Only init local DB if not using Firestore
         if not self.use_firestore:
