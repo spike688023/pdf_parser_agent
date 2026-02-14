@@ -48,7 +48,7 @@ def get_session_db_url(session_id: str = None) -> str:
     return f"sqlite+aiosqlite:///{db_path}"
 
 class VectorStore:
-    def __init__(self, storage_dir: str = None, dimension: int = 1024, session_id: str = None):
+    def __init__(self, storage_dir: str = None, dimension: int = 2048, session_id: str = None):
         # Use centralized logic for storage dir
         self.storage_dir = storage_dir if storage_dir else get_storage_dir()
         self.dimension = dimension
@@ -201,26 +201,24 @@ class VectorStore:
                     payload = items[i].copy()
                     
                     # Determine ID: Use SQLite/Firestore ID if available, else generate UUID
-                    point_id = None
+                    # Generate Deterministic ID for deduplication (Method 2)
+                    # Use UUIDv5 which is deterministic based on namespace + name
+                    # Uniqueness key: document_name + page_number + text
+                    # This ensures re-uploading the same content produces the specific same ID,
+                    # allowing Qdrant to overwrite (update) instead of duplicate.
+                    doc_name = items[i].get("document_name", "unknown_doc")
+                    page_num = str(items[i].get("page_number", "0"))
+                    text_content = items[i]["text"]
+                    
+                    # Create a unique seed string
+                    unique_seed = f"{doc_name}_{page_num}_{text_content}"
+                    
+                    # Generate deterministic UUID
+                    point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, unique_seed))
+
+                    # Preserve link to SQLite/Firestore ID if available
                     if inserted_ids:
-                        raw_id = inserted_ids[i]
-                        # Check if it looks like an integer (SQLite ROWID)
-                        if isinstance(raw_id, int) or (isinstance(raw_id, str) and raw_id.isdigit()):
-                            point_id = int(raw_id)
-                        else:
-                            # Try to use as UUID string, or generate new UUID if not compatible
-                            try:
-                                # Validate if it's a UUID
-                                uuid.UUID(str(raw_id))
-                                point_id = str(raw_id)
-                            except ValueError:
-                                # Not a UUID, allow Qdrant/Client to generate or hash it? 
-                                # For simplicity, let's generate a new UUID for Qdrant and store mapping in payload
-                                point_id = str(uuid.uuid4())
-                                payload["original_db_id"] = str(raw_id)
-                    else:
-                        # No DB ID, use UUID
-                        point_id = str(uuid.uuid4())
+                        payload["original_db_id"] = str(inserted_ids[i])
 
                     points.append(models.PointStruct(
                         id=point_id,
@@ -229,10 +227,10 @@ class VectorStore:
                     ))
                 
                 # Batch upsert to avoid payload size limit error (32MB)
-                batch_size = 50
+                batch_size = 10  # Reduce to 10 to be safe
                 total_batches = (len(points) + batch_size - 1) // batch_size
                 
-                print(f"Upserting {len(points)} points in {total_batches} batches...")
+                print(f"Upserting {len(points)} points in {total_batches} batches...", flush=True)
                 
                 for i in range(0, len(points), batch_size):
                     batch = points[i:i + batch_size]
@@ -241,13 +239,22 @@ class VectorStore:
                             collection_name="pdf_rag",
                             points=batch
                         )
-                        print(f"  - Batch {i//batch_size + 1}/{total_batches} upserted successfully.")
+                        print(f"  - Batch {i//batch_size + 1}/{total_batches} upserted successfully.", flush=True)
                     except Exception as batch_error:
-                        print(f"  ⚠️ Error upserting batch {i//batch_size + 1}: {batch_error}")
+                        print(f"  ⚠️ Error upserting batch {i//batch_size + 1}: {batch_error}", flush=True)
+                        # Debug: Print sample payload and vector dimension
+                        if len(batch) > 0:
+                            print(f"  DEBUG: First point in batch vector dim: {len(batch[0].vector)}", flush=True)
+                            print(f"  DEBUG: First point payload keys: {list(batch[0].payload.keys())}", flush=True)
+                            
                         # Continue with other batches even if one fails
                         
-                print(f"Finished upserting {len(points)} points to Qdrant.")
+                print(f"Finished upserting {len(points)} points to Qdrant.", flush=True)
             except Exception as e:
+                print(f"⚠️ Failed to add to Qdrant: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
+                sys.stdout.flush()
                 print(f"⚠️ Failed to add to Qdrant: {e}")
                 import traceback
                 traceback.print_exc()

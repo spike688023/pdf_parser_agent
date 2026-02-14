@@ -5,7 +5,7 @@ import tempfile
 import aiohttp
 from dotenv import load_dotenv
 from src.agent import create_qa_agent
-from src.rag_engine import ingest_pdf_tool, highlight_document_tool, set_session_vector_store
+from src.rag_engine import ingest_pdf_tool, set_session_vector_store
 from src.pdf_parser import parse_pdf_file
 from src.database import _vector_store, VectorStore
 from src.session_cleanup import SessionCleanup, update_session_activity
@@ -181,31 +181,7 @@ if st.session_state.documents:
                 else:
                     st.info("No tags generated yet")
                 
-                st.divider()
-                
-                # Highlights
-                if doc.get('highlights'):
-                    st.markdown("### ✨ Key Highlights")
-                    st.markdown(doc['highlights'])
-                else:
-                    # Generate highlights button
-                    if st.button("Generate Highlights", key=f"gen_hl_{doc['document_id']}"):
-                        with st.spinner("Generating highlights..."):
-                            # Ensure session vector store is set for the tool to save highlights
-                            set_session_vector_store(st.session_state.session_vector_store)
-                            update_session_activity(st.session_state.session_id)
-                            
-                            async def gen_highlights():
-                                return await highlight_document_tool(doc['file_path'])
-                            
-                            try:
-                                highlights = asyncio.run(gen_highlights())
-                                st.markdown("### ✨ Key Highlights")
-                                st.markdown(highlights)
-                                # Reload to show updated highlights
-                                load_documents()
-                            except Exception as e:
-                                st.error(f"Error: {e}")
+
     
     with col_chat:
         st.subheader("💬 Chat with Your Documents")

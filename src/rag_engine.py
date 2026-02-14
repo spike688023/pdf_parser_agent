@@ -585,9 +585,10 @@ async def highlight_document_tool(file_path: str, pages: Optional[List[str]] = N
             
         print(f"Document split into {len(chunks)} chunks for processing.")
         
-        partial_summaries = []
-        for i, chunk in enumerate(chunks):
-            print(f"Processing chunk {i+1}/{len(chunks)}...")
+        print(f"Document split into {len(chunks)} chunks for processing. Starting parallel execution...")
+        
+        async def process_chunk(chunk, index):
+            print(f"Processing chunk {index+1}/{len(chunks)}...")
             prompt = f"""
             Analyze the following text segment from a larger document.
             Extract the key points, important definitions, and main ideas.
@@ -598,19 +599,19 @@ async def highlight_document_tool(file_path: str, pages: Optional[List[str]] = N
             """
             try:
                 response = await asyncio.to_thread(model.generate_content, prompt)
-                partial_summaries.append(response.text)
+                return response.text
             except Exception as api_error:
                 error_str = str(api_error)
                 if "429" in error_str or "quota" in error_str.lower():
-                    import re
-                    retry_match = re.search(r'retry in (\d+(?:\.\d+)?)', error_str, re.IGNORECASE)
-                    if retry_match:
-                        retry_seconds = int(float(retry_match.group(1)))
-                        return f"⏳ API quota exceeded while processing chunk {i+1}. Please wait {retry_seconds} seconds and try again."
-                    else:
-                        return "⏳ API quota exceeded. Please wait a moment and try again."
+                    print(f"⚠️ Quota exceeded for chunk {index+1}")
+                    return "" # Return empty string on failure to allow others to proceed
                 else:
-                    raise
+                    print(f"❌ Error processing chunk {index+1}: {api_error}")
+                    return ""
+
+        # Fire all requests in parallel
+        partial_summaries = await asyncio.gather(*[process_chunk(chunk, i) for i, chunk in enumerate(chunks)])
+        partial_summaries = [s for s in partial_summaries if s] # Filter out failures
             
         # 3. Reduce Phase: Combine summaries
         combined_summary = "\n\n".join(partial_summaries)

@@ -1,5 +1,8 @@
 FROM python:3.10-slim
 
+# Force Python to flush stdout/stderr immediately (no buffering)
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 # 安裝系統依賴

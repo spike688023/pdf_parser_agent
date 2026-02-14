@@ -8,14 +8,33 @@ spec:
     kind: Deployment
     name: pdf-agent
   minReplicas: 1
-  maxReplicas: 5
+  maxReplicas: 2
   metrics:
   - type: Resource
     resource:
       name: cpu
       target:
         type: Utilization
-        averageUtilization: 70
+        averageUtilization: 50  # 當 CPU 使用率超過 50% 時擴展
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 70  # 當記憶體使用率超過 70% 時擴展
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30  # 30 秒後才擴展 (避免抖動)
+      policies:
+      - type: Percent
+        value: 100  # 每次最多增加 100% (1 → 2 → 3)
+        periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 60  # 60 秒後才縮減 (避免頻繁縮減)
+      policies:
+      - type: Percent
+        value: 50  # 每次最多減少 50%
+        periodSeconds: 60
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -27,7 +46,7 @@ spec:
     kind: Deployment
     name: embedding-nim
   minReplicas: 1
-  maxReplicas: 3 # GPU 資源昂貴，限制上限
+  maxReplicas: 1 # GPU 資源昂貴，限制上限
   metrics:
   # 理想情況是用 GPU Metrics (DCGM)，這裡先用 CPU 作為替代指標
   # 因為 GPU 忙的時候，CPU 通常也會忙著搬運資料
@@ -48,7 +67,7 @@ spec:
     kind: Deployment
     name: reranking-nim
   minReplicas: 1
-  maxReplicas: 3
+  maxReplicas: 1
   metrics:
   - type: Resource
     resource:
