@@ -225,32 +225,78 @@ if st.session_state.documents:
                     
                     query_content = types.Content(role="user", parts=[types.Part(text=prompt)])
                     
-                    async for event in runner.run_async(
-                        session_id=st.session_state.session_id,
-                        user_id="streamlit-user",
-                        new_message=query_content
-                    ):
-                        # Log the event for debugging
-                        logging.info(f"Event received type: {type(event)}")
-                        if hasattr(event, '__dict__'):
-                            logging.info(f"Event attributes: {event.__dict__}")
-                        else:
-                            logging.info(f"Event string: {str(event)}")
+                    # Container for displaying tool outputs (sources)
+                    source_container = st.empty()
+                    retrieved_context = []
 
-                        # Handle ADK Event structure
-                        if hasattr(event, 'content') and event.content:
-                            content = event.content
-                            if hasattr(content, 'role') and content.role == 'model':
-                                if hasattr(content, 'parts'):
-                                    for part in content.parts:
-                                        if hasattr(part, 'text') and part.text:
-                                            yield part.text
-                        # Fallback for older ADK versions or different event types
-                        elif hasattr(event, 'type') and event.type == "model_response":
-                            if hasattr(event, 'text') and event.text:
-                                yield event.text
-                            elif hasattr(event, 'part') and hasattr(event.part, 'text'):
-                                yield event.part.text
+                    try:
+                        async for event in runner.run_async(
+                            session_id=st.session_state.session_id,
+                            user_id="streamlit-user",
+                            new_message=query_content
+                        ):
+                            # Log the event for debugging
+                            logging.info(f"Event received type: {type(event)}")
+                            if hasattr(event, '__dict__'):
+                                logging.info(f"Event attributes: {event.__dict__}")
+                            else:
+                                logging.info(f"Event string: {str(event)}")
+
+                            # Capture Tool Outputs (Context) for display
+                            # Check different event structures for tool outputs
+                            tool_output = None
+                            if hasattr(event, 'tool_output') and event.tool_output:
+                                tool_output = event.tool_output
+                            elif hasattr(event, 'content') and hasattr(event.content, 'parts'):
+                                for part in event.content.parts:
+                                    if hasattr(part, 'function_response') and part.function_response:
+                                        # This is likely a tool response part
+                                        tool_output = part.function_response.response
+
+                            if tool_output:
+                                output_str = str(tool_output)
+                                # Filter to only show relevant context retrieval output (heuristic)
+                                if "Source" in output_str or "Document" in output_str or "Highlights" in output_str:
+                                    retrieved_context.append(output_str)
+
+                            # Handle ADK Event structure for Model Response
+                            if hasattr(event, 'content') and event.content:
+                                content = event.content
+                                if hasattr(content, 'role') and content.role == 'model':
+                                    if hasattr(content, 'parts'):
+                                        for part in content.parts:
+                                            if hasattr(part, 'text') and part.text:
+                                                yield part.text
+                            # Fallback for older ADK versions or different event types
+                            elif hasattr(event, 'type') and event.type == "model_response":
+                                if hasattr(event, 'text') and event.text:
+                                    yield event.text
+                                elif hasattr(event, 'part') and hasattr(event.part, 'text'):
+                                    yield event.part.text
+                    finally:
+                        # Explicitly close the model client to avoid asyncio errors
+                        if hasattr(agent, 'model'):
+                            client = getattr(agent.model, 'client', None) or getattr(agent.model, '_client', None)
+                            if client:
+                                try:
+                                    if hasattr(client, 'aclose'):
+                                        await client.aclose()
+                                    elif hasattr(client, 'close'):
+                                        if asyncio.iscoroutinefunction(client.close):
+                                            await client.close()
+                                        else:
+                                            client.close()
+                                except Exception as e:
+                                    logging.warning(f"Error closing client: {e}")
+                        
+                        # Display collected context in an expander
+                        if retrieved_context:
+                            with source_container:
+                                with st.expander("📚 參考來源 (Retrieved Sources)", expanded=False):
+                                    for i, ctx in enumerate(retrieved_context):
+                                        st.markdown(f"**檢索結果 #{i+1}:**")
+                                        st.markdown(ctx)
+                                        st.divider()
         
                 # st.write_stream handles the async generator
                 try:
