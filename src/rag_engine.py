@@ -14,14 +14,18 @@ import requests
 import google.generativeai as genai
 
 # Configuration
+# Configuration
 from google.genai import types
+from src.metrics import RERANK_LATENCY, VECTOR_SEARCH_LATENCY
+
+# Define RAG Metrics
+# (Removed local definitions as they are now imported)
 
 def get_session_vector_store():
     """Get the current session's vector store."""
     from src.database import _current_session_vector_store
     return _current_session_vector_store
 
-# Configuration
 retry_config = types.HttpRetryOptions(
     attempts=3,
     exp_base=2,
@@ -261,14 +265,16 @@ def retrieve_context_tool(query: str) -> str:
         # 2. Initial Vector Search (Retrieve top 20 for reranking)
         # We fetch more candidates because vector search is approximate
         initial_k = 20
-        candidates = search_database(query_embedding_np, k=initial_k)
+        with VECTOR_SEARCH_LATENCY.time():
+            candidates = search_database(query_embedding_np, k=initial_k)
         
         if not candidates:
             return "No relevant context found."
             
         # 3. Reranking (Refinement)
         candidate_texts = [c['text'] for c in candidates]
-        ranked_indices = _rerank_documents(query, candidate_texts)
+        with RERANK_LATENCY.time():
+            ranked_indices = _rerank_documents(query, candidate_texts)
         
         # Select top 5 after reranking
         final_top_k = 5

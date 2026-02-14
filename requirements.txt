@@ -12,3 +12,4 @@ google-adk
 google-cloud-storage
 qdrant-client
 google-cloud-firestore
+prometheus-client
