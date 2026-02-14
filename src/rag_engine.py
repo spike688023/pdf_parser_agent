@@ -11,6 +11,7 @@ from src.pdf_parser import parser_agent, parse_pdf_file
 from .database import add_to_database, search_database, set_session_vector_store
 from src.pdf_parser import parser_agent, parse_pdf_file
 import requests
+import time
 import google.generativeai as genai
 
 # Configuration
@@ -265,6 +266,7 @@ def retrieve_context_tool(query: str) -> str:
         # 2. Initial Vector Search (Retrieve top 20 for reranking)
         # We fetch more candidates because vector search is approximate
         initial_k = 20
+        # Use metric time() method
         with VECTOR_SEARCH_LATENCY.time():
             candidates = search_database(query_embedding_np, k=initial_k)
         

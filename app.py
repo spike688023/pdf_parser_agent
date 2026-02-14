@@ -162,12 +162,17 @@ with st.sidebar:
     st.divider()
     
     # List all documents
+    if not st.session_state.documents:
+        st.info("Upload your first PDF above to get started!")
+
     if st.session_state.documents:
         st.subheader("📄 Your Documents")
         for doc in st.session_state.documents:
             with st.expander(f"📄 {doc['document_name']}", expanded=False):
                 st.caption(f"Uploaded: {doc['upload_time'][:19]}")
                 st.caption(f"Chunks: {doc['chunk_count']}")
+                if doc.get('tags'):
+                    st.caption(f"🏷️ Tags: {doc['tags']}")
                 if st.button("🗑️ Delete", key=f"del_{doc['document_id']}"):
                     update_session_activity(st.session_state.session_id)
                     st.session_state.session_vector_store.delete_document(doc['document_id'])
@@ -331,6 +336,4 @@ for message in reversed(history_to_display):
                 st.markdown(pending_assistant_message["content"])
             pending_assistant_message = None
                 
-else:
-    # No documents uploaded yet
-    st.info("👈 Upload your first PDF to get started!")
+
