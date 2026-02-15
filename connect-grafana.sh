@@ -21,4 +21,8 @@ echo "=============================================="
 echo "Press Ctrl+C to stop."
 
 # 啟動 Port-Forward
+# 自動開啟瀏覽器 (macOS only)
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    (sleep 2 && open "http://localhost:3000") &
+fi
 kubectl port-forward svc/monitoring-grafana 3000:80 -n monitoring

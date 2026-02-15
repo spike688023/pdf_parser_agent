@@ -72,26 +72,46 @@ class VectorStore:
         # Default to False unless explicitly enabled or if QDRANT_URL is set
         self.use_qdrant = os.getenv("USE_QDRANT", "false").lower() == "true" or os.getenv("QDRANT_URL") is not None
         self.qdrant_client = None
+        self.sparse_model = None
+        self.collection_name = "pdf_rag_hybrid" # Hybrid collection
         
         if self.use_qdrant:
             try:
                 from qdrant_client import QdrantClient
                 from qdrant_client.http import models
+                try:
+                    from fastembed import SparseTextEmbedding
+                    # Initialize BM42 model for sparse embeddings
+                    self.sparse_model = SparseTextEmbedding(model_name="Qdrant/bm42-all-minilm-l6-v2-attentions")
+                    print("✅ Loaded Sparse Embedding Model (BM42)")
+                except ImportError:
+                    print("⚠️ fastembed not installed. Hybrid search capabilities limited.")
+                except Exception as e:
+                    print(f"⚠️ Failed to load sparse model: {e}")
                 
                 url = os.getenv("QDRANT_URL", "http://qdrant:6333")
                 api_key = os.getenv("QDRANT_API_KEY") # Optional
                 
                 self.qdrant_client = QdrantClient(url=url, api_key=api_key)
                 
-                # Create collection if not exists
-                collection_name = "pdf_rag"
-                if not self.qdrant_client.collection_exists(collection_name):
+                # Create collection if not exists (Hybrid Config)
+                if not self.qdrant_client.collection_exists(self.collection_name):
+                    print(f"Creating hybrid collection: {self.collection_name}")
                     self.qdrant_client.create_collection(
-                        collection_name=collection_name,
-                        vectors_config=models.VectorParams(
-                            size=self.dimension,
-                            distance=models.Distance.DOT
-                        )
+                        collection_name=self.collection_name,
+                        vectors_config={
+                            "dense": models.VectorParams(
+                                size=self.dimension,
+                                distance=models.Distance.DOT
+                            )
+                        },
+                        sparse_vectors_config={
+                            "sparse": models.SparseVectorParams(
+                                index=models.SparseIndexParams(
+                                    on_disk=False
+                                )
+                            )
+                        }
                     )
                 
                 print(f"✅ Using Qdrant Vector DB at {url}")
@@ -195,34 +215,43 @@ class VectorStore:
                 if len(embeddings) > 0:
                     print(f"DEBUG: Embedding dimension: {len(embeddings[0])}")
 
+                # Generate Sparse Embeddings if model available
+                sparse_embeddings = []
+                if self.sparse_model:
+                     texts = [item["text"] for item in items]
+                     # Returns generator, convert to list
+                     sparse_embeddings = list(self.sparse_model.embed(texts))
+
                 points = []
                 for i, embedding in enumerate(embeddings):
                     # Combine original item dict with document metadata for payload
                     payload = items[i].copy()
                     
                     # Determine ID: Use SQLite/Firestore ID if available, else generate UUID
-                    # Generate Deterministic ID for deduplication (Method 2)
-                    # Use UUIDv5 which is deterministic based on namespace + name
-                    # Uniqueness key: document_name + page_number + text
-                    # This ensures re-uploading the same content produces the specific same ID,
-                    # allowing Qdrant to overwrite (update) instead of duplicate.
                     doc_name = items[i].get("document_name", "unknown_doc")
                     page_num = str(items[i].get("page_number", "0"))
                     text_content = items[i]["text"]
-                    
-                    # Create a unique seed string
                     unique_seed = f"{doc_name}_{page_num}_{text_content}"
-                    
-                    # Generate deterministic UUID
                     point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, unique_seed))
 
                     # Preserve link to SQLite/Firestore ID if available
                     if inserted_ids:
                         payload["original_db_id"] = str(inserted_ids[i])
+                    
+                    # Construc Vector Struct (Dense + Sparse)
+                    vector_struct = {
+                        "dense": embedding.tolist()
+                    }
+                    if self.sparse_model and i < len(sparse_embeddings):
+                        sv = sparse_embeddings[i]
+                        vector_struct["sparse"] = models.SparseVector(
+                            indices=sv.indices.tolist(),
+                            values=sv.values.tolist()
+                        )
 
                     points.append(models.PointStruct(
                         id=point_id,
-                        vector=embedding.tolist(),
+                        vector=vector_struct,
                         payload=payload
                     ))
                 
@@ -230,24 +259,18 @@ class VectorStore:
                 batch_size = 10  # Reduce to 10 to be safe
                 total_batches = (len(points) + batch_size - 1) // batch_size
                 
-                print(f"Upserting {len(points)} points in {total_batches} batches...", flush=True)
+                print(f"Upserting {len(points)} points in {total_batches} batches to {self.collection_name}...", flush=True)
                 
                 for i in range(0, len(points), batch_size):
                     batch = points[i:i + batch_size]
                     try:
                         self.qdrant_client.upsert(
-                            collection_name="pdf_rag",
+                            collection_name=self.collection_name,
                             points=batch
                         )
                         print(f"  - Batch {i//batch_size + 1}/{total_batches} upserted successfully.", flush=True)
                     except Exception as batch_error:
                         print(f"  ⚠️ Error upserting batch {i//batch_size + 1}: {batch_error}", flush=True)
-                        # Debug: Print sample payload and vector dimension
-                        if len(batch) > 0:
-                            print(f"  DEBUG: First point in batch vector dim: {len(batch[0].vector)}", flush=True)
-                            print(f"  DEBUG: First point payload keys: {list(batch[0].payload.keys())}", flush=True)
-                            
-                        # Continue with other batches even if one fails
                         
                 print(f"Finished upserting {len(points)} points to Qdrant.", flush=True)
             except Exception as e:
@@ -263,17 +286,80 @@ class VectorStore:
         self.index.add(embeddings.astype('float32'))
         self.save_index()
 
-    def search(self, query_embedding: np.ndarray, k: int = 5) -> List[Dict[str, Any]]:
+    def search(self, query_embedding: np.ndarray, query_text: Optional[str] = None, k: int = 5, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         results = []
         
         # Try Qdrant Search first
         if self.use_qdrant and self.qdrant_client:
             try:
-                search_result = self.qdrant_client.search(
-                    collection_name="pdf_rag",
-                    query_vector=query_embedding.tolist(), # Convert to list for Qdrant
-                    limit=k
-                )
+                from qdrant_client.http import models
+                
+                # Build Qdrant filter
+                query_filter = None
+                if filters and filters.get('tags'):
+                    tags = filters['tags']
+                    if isinstance(tags, str):
+                        tags = [tags]
+                    
+                    conditions = []
+                    for tag in tags:
+                        # Use MatchText for keyword matching in string field
+                        conditions.append(models.FieldCondition(
+                            key="tags",
+                            match=models.MatchText(text=tag)
+                        ))
+                    
+                    if conditions:
+                        # Use SHOULD (OR) to matches any of the tags
+                        query_filter = models.Filter(should=conditions)
+
+                # perform Search
+                # If we have query_text and sparse model, use Hybrid Search
+                search_result = []
+                if query_text and self.sparse_model:
+                     # HYBRID SEARCH (Prefetch + Fusion)
+                     # 1. Compute Sparse Embedding
+                     sparse_q = list(self.sparse_model.embed([query_text]))[0]
+                     
+                     # 2. Build Prefetches
+                     prefetch = [
+                         models.Prefetch(
+                             query=query_embedding.tolist(),
+                             using="dense",
+                             filter=query_filter,
+                             limit=k * 2
+                         ),
+                         models.Prefetch(
+                             query=models.SparseVector(
+                                 indices=sparse_q.indices.tolist(),
+                                 values=sparse_q.values.tolist()
+                             ),
+                             using="sparse",
+                             filter=query_filter,
+                             limit=k * 2
+                         )
+                     ]
+                     
+                     # 3. Query Points with Fusion
+                     response = self.qdrant_client.query_points(
+                         collection_name=self.collection_name,
+                         prefetch=prefetch,
+                         query=models.FusionQuery(method=models.Fusion.RRF),
+                         limit=k
+                     )
+                     search_result = response.points
+                else:
+                    # STANDARD DENSE SEARCH
+                    # Fallback if no text or no sparse model
+                    search_result = self.qdrant_client.search(
+                        collection_name=self.collection_name,
+                        query_vector=models.NamedVector(
+                            name="dense",
+                            vector=query_embedding.tolist()
+                        ),
+                        query_filter=query_filter,
+                        limit=k
+                    )
                 
                 for hit in search_result:
                     payload = hit.payload
@@ -284,7 +370,7 @@ class VectorStore:
                         "document_id": payload.get("document_id", ""),
                         "document_name": payload.get("document_name", ""),
                         "tags": payload.get("tags", ""),
-                        "distance": hit.score # Qdrant returns score (higher is better for DOT)
+                        "distance": hit.score # Qdrant returns score (higher is better for DOT/RRF)
                     })
                 return results
             except Exception as e:
@@ -301,6 +387,14 @@ class VectorStore:
             print("⚠️ FAISS + Firestore combination not fully supported. Using SQLite.")
             
         cursor = self.conn.cursor() if not self.use_firestore else None
+        
+        # Prepare tag filter list for local check
+        filter_tags = []
+        if filters and filters.get('tags'):
+            val = filters['tags']
+            filter_tags = [val] if isinstance(val, str) else val
+            filter_tags = [t.lower() for t in filter_tags]
+
         for i, idx in enumerate(indices[0]):
             if idx == -1: continue
             chunk_id = int(idx) + 1
@@ -308,6 +402,12 @@ class VectorStore:
                 cursor.execute("SELECT text, page_number, source, document_id, document_name, tags FROM chunks WHERE id = ?", (chunk_id,))
                 row = cursor.fetchone()
                 if row:
+                    # Post-retrieval filtering for FAISS/SQLite
+                    row_tags = row[5] or ""
+                    if filter_tags:
+                        if not any(ft in row_tags.lower() for ft in filter_tags):
+                            continue
+
                     results.append({
                         "text": row[0],
                         "page_number": row[1],
@@ -474,7 +574,7 @@ def add_to_database(items: List[Dict[str, Any]], embeddings: np.ndarray) -> str:
     except Exception as e:
         return f"Error adding items: {e}"
 
-def search_database(query_embedding: np.ndarray, k: int = 5) -> List[Dict[str, Any]]:
+def search_database(query_embedding: np.ndarray, query_text: Optional[str] = None, k: int = 5, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """
     Searches the vector store for nearest neighbors.
     Uses session-specific vector store if available, otherwise falls back to global.
@@ -482,7 +582,7 @@ def search_database(query_embedding: np.ndarray, k: int = 5) -> List[Dict[str, A
     try:
         # Use session-specific vector store if available
         store = _current_session_vector_store if _current_session_vector_store else _vector_store
-        return store.search(query_embedding, k)
+        return store.search(query_embedding, query_text=query_text, k=k, filters=filters)
     except Exception as e:
         print(f"Error searching database: {e}")
         return []

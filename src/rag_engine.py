@@ -254,6 +254,56 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
             except Exception as cleanup_error:
                 print(f"Warning: Failed to cleanup temp file: {cleanup_error}")
 
+def _extract_query_filters(query: str) -> Optional[Dict[str, Any]]:
+    """
+    Analyzes the query to extract potential filters (e.g. tags).
+    Returns a dictionary of filters or None.
+    """
+    try:
+        if not os.getenv("GOOGLE_API_KEY"):
+            return None
+            
+        import google.generativeai as genai
+        import json
+        
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        model = genai.GenerativeModel('gemini-2.0-flash-lite')
+        
+        prompt = f"""
+        Analyze the search query and identify if the user is filtering by a specific topic, domain, or document type.
+        Extract relevant keywords that might match document tags (e.g., "Finance", "Report", "NVIDIA", "2024").
+        Return ONLY a JSON object with a "tags" key containing a list of strings. If no specific filter is implied, return generic tags or empty list.
+        
+        Query: "{query}"
+        
+        Examples:
+        Query: "Show me financial reports"
+        {{"tags": ["Finance", "Report"]}}
+        
+        Query: "What is the revenue of Nvidia?"
+        {{"tags": ["Nvidia", "Revenue", "Finance"]}}
+        
+        Query: "Summary of the document"
+        {{"tags": []}}
+        """
+        
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+        # Clean markdown code blocks if any
+        if text.startswith("```json"):
+            text = text[7:-3]
+        elif text.startswith("```"):
+            text = text[3:-3]
+            
+        data = json.loads(text)
+        if data.get("tags"):
+             return {"tags": data["tags"]}
+        return None
+        
+    except Exception as e:
+        print(f"Warning: Failed to extract query filters: {e}")
+        return None
+
 def retrieve_context_tool(query: str) -> str:
     """
     Retrieves relevant context for a query.
@@ -263,12 +313,23 @@ def retrieve_context_tool(query: str) -> str:
         # 1. Generate query embedding using NIM
         query_embedding_np = _get_nim_embeddings([query], input_type="query")[0]
         
+        # 1.5. Extract filters
+        filters = _extract_query_filters(query)
+        if filters:
+             print(f"🔍 Extracted filters: {filters}")
+
         # 2. Initial Vector Search (Retrieve top 20 for reranking)
         # We fetch more candidates because vector search is approximate
         initial_k = 20
         # Use metric time() method
         with VECTOR_SEARCH_LATENCY.time():
-            candidates = search_database(query_embedding_np, k=initial_k)
+            candidates = search_database(query_embedding_np, query_text=query, k=initial_k, filters=filters)
+            
+        # Retry without filters if no results
+        if not candidates and filters:
+            print("⚠️ No results with filters, retrying without filters...")
+            with VECTOR_SEARCH_LATENCY.time():
+                candidates = search_database(query_embedding_np, query_text=query, k=initial_k)
         
         if not candidates:
             return "No relevant context found."

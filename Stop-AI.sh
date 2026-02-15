@@ -24,11 +24,11 @@ $KUBECTL_CMD scale deployment embedding-nim --replicas=0
 
 # Reranking now uses Gemini API (no deployment to scale down)
 
-echo "⬇️ Scaling down Qdrant DB..."
-$KUBECTL_CMD scale deployment qdrant --replicas=0
+echo "🗑️ Deleting Qdrant DB Deployment (to clear index/memory)..."
+$KUBECTL_CMD delete deployment qdrant --ignore-not-found=true
 
-echo "⬇️ Scaling down PDF Agent Web App..."
-$KUBECTL_CMD scale deployment pdf-agent --replicas=0
+echo "🗑️ Deleting PDF Agent Deployment (to force image update on restart)..."
+$KUBECTL_CMD delete deployment pdf-agent --ignore-not-found=true
 
 echo "✅ All services stopped!"
 echo "💰 No active Pods = No Compute Cost (in GKE Autopilot/Autoscaling)."

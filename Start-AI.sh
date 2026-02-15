@@ -23,8 +23,9 @@ $KUBECTL_CMD scale deployment embedding-nim --replicas=1 || true
 
 # Reranking now uses Gemini API (no deployment needed)
 
-echo "📈 Scaling up Qdrant DB..."
-$KUBECTL_CMD scale deployment qdrant --replicas=1 || true
+# Qdrant is deleted in stop script, so we effectively redeploy it via apply below
+# echo "📈 Scaling up Qdrant DB..."
+# $KUBECTL_CMD scale deployment qdrant --replicas=1 || true
 
 echo "📈 Scaling up PDF Agent Web App..."
 $KUBECTL_CMD scale deployment pdf-agent --replicas=1 || true
