@@ -25,3 +25,18 @@ gcloud artifacts repositories create "${REPO}" \
 gcloud builds submit --tag "${FULL_IMAGE}" --project="${PROJECT_ID}" --region="${REGION}" .
 
 echo "=== Done! Image pushed to ${FULL_IMAGE} ==="
+
+echo "=== Cleaning up old images (keeping latest 3) ==="
+IMAGE_PATH="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE}"
+
+# List all digests sorted by creation time (newest first), skip top 3, and delete the rest
+gcloud artifacts docker images list "${IMAGE_PATH}" \
+  --sort-by=~create_time \
+  --format="value(digest)" | \
+  tail -n +4 | \
+  while read -r digest; do
+    echo "Deleting old image digest: ${digest}"
+    gcloud artifacts docker images delete "${IMAGE_PATH}@${digest}" --delete-tags --quiet
+  done
+
+echo "=== Cleanup complete ==="

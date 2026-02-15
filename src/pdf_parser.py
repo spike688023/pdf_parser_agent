@@ -18,31 +18,64 @@ def parse_pdf_file(pdf_path: str):
     """
     Parse a PDF file and return a list of (page_number, text) tuples.
     This preserves page information for accurate citation and includes table content.
+    NOTE: This loads the entire PDF into memory. For large files, use yield_pdf_pages.
     """
-    pages = []
+    try:
+        return list(yield_pdf_pages(pdf_path))
+    except Exception as e:
+        return f"Error parsing PDF: {e}"
+
+def yield_pdf_pages(pdf_path: str):
+    """
+    Generator that yields (page_number, text) tuples from a PDF file.
+    This is memory efficient for large files as it processes one page at a time.
+    """
+    import logging
+    
     try:
         with pdfplumber.open(pdf_path) as pdf:
             for i, page in enumerate(pdf.pages):
+                if not page:
+                    continue
+                    
                 page_num = i + 1
                 
                 # Extract regular text
                 page_text = page.extract_text() or ""
                 
                 # Extract tables
-                tables = page.extract_tables()
-                if tables:
-                    page_text += "\n\n--- TABLES ON THIS PAGE ---\n"
-                    for table_idx, table in enumerate(tables):
-                        page_text += f"\n[Table {table_idx + 1}]\n"
-                        page_text += _format_table(table)
-                        page_text += "\n"
+                try:
+                    tables = page.extract_tables()
+                    if tables:
+                        page_text += "\n\n--- TABLES ON THIS PAGE ---\n"
+                        # Use the helper function (which we need to make sure is available)
+                        for table_idx, table in enumerate(tables):
+                            page_text += f"\n[Table {table_idx + 1}]\n"
+                            page_text += _format_table(table)
+                            page_text += "\n"
+                except Exception as table_error:
+                    logging.warning(f"Failed to extract tables on page {page_num}: {table_error}")
                 
                 if page_text.strip():
-                    pages.append((page_num, page_text))
+                    yield (page_num, page_text)
                     
     except Exception as e:
-        return f"Error parsing PDF: {e}"
-    return pages
+        # We can't easily return an error string in a generator of tuples without breaking type expectations
+        # So we log and re-raise or yield a special error page
+        logging.error(f"Error parsing PDF: {e}")
+        raise e
+
+def get_pdf_page_count(pdf_path: str) -> int:
+    """
+    Get the total number of pages in a PDF file efficiently.
+    Used for progress tracking.
+    """
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            return len(pdf.pages)
+    except Exception as e:
+        print(f"Warning: Could not get page count for {pdf_path}: {e}")
+        return 0
 
 def _format_table(table) -> str:
     """
