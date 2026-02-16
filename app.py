@@ -263,7 +263,7 @@ if prompt := st.chat_input("Ask a question about your documents"):
                     tool_output = None
                     if hasattr(event, 'tool_output') and event.tool_output:
                         tool_output = event.tool_output
-                    elif hasattr(event, 'content') and hasattr(event.content, 'parts'):
+                    elif hasattr(event, 'content') and hasattr(event.content, 'parts') and event.content.parts:
                         for part in event.content.parts:
                             if hasattr(part, 'function_response') and part.function_response:
                                 # This is likely a tool response part
@@ -279,7 +279,7 @@ if prompt := st.chat_input("Ask a question about your documents"):
                     if hasattr(event, 'content') and event.content:
                         content = event.content
                         if hasattr(content, 'role') and content.role == 'model':
-                            if hasattr(content, 'parts'):
+                            if hasattr(content, 'parts') and content.parts:
                                 for part in content.parts:
                                     if hasattr(part, 'text') and part.text:
                                         yield part.text

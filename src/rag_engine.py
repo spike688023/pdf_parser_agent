@@ -95,7 +95,7 @@ def _rerank_documents(query: str, documents: List[str]) -> List[int]:
         
         # Configure Gemini API
         genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        model = genai.GenerativeModel('gemini-2.5-flash-lite')
         
         # Create reranking prompt
         docs_text = "\n\n".join([f"Document {i}: {doc}" for i, doc in enumerate(documents)])
@@ -130,30 +130,30 @@ Ranking (indices only, comma-separated):"""
         return list(range(len(documents)))
 
 # ======== RAG Tools ========
-def ingest_pages_tool(pages: List[tuple], source: str, tags: str = "") -> str:
+def ingest_pages_tool(pages: List[tuple], source: str, tags: str = "") -> int:
     """
     Chunks pages (with page numbers), generates embeddings, and stores them in the database.
-    
+
     Args:
         pages: List of (page_number, text) tuples
         source: Source file path
         tags: Comma-separated tags
+
+    Returns:
+        Number of chunks processed.
     """
     if not pages:
-        return "No pages to ingest."
-        
+        return 0
+
     chunks = _chunk_pages(pages, source, tags=tags)
     texts = [chunk["text"] for chunk in chunks]
-    
-    try:
-        # Generate embeddings using NIM
-        embeddings_np = _get_nim_embeddings(texts, input_type="passage")
-        
-        # Call database tool
-        return add_to_database(chunks, embeddings_np)
-    except Exception as e:
-        print(f"Error generating embeddings: {e}")
-        return f"Error generating embeddings: {e}"
+
+    # Generate embeddings using NIM
+    embeddings_np = _get_nim_embeddings(texts, input_type="passage")
+
+    # Store in database
+    add_to_database(chunks, embeddings_np)
+    return len(chunks)
 
 def ingest_text_tool(text: str, source: str) -> str:
     """
@@ -215,7 +215,7 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
         
         tags = ""
         total_chunks_processed = 0
-        BATCH_SIZE = 10  # Process 10 pages at a time to keep memory low
+        BATCH_SIZE = 25  # Pod has ~1.7Gi headroom (4Gi limit, ~2.3Gi used); 25 pages ≈ few MB per batch
         
         # Strategy:
         # 1. If 'pages' provided (legacy/small doc), use it directly.
@@ -225,33 +225,33 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
             print(f"Using pre-parsed pages for: {file_path}")
             if isinstance(pages, str):  # Error message
                 return f"Failed to parse PDF: {pages}"
-                
+
             # Generate Tags (using first 5 pages)
             print(f"Generating tags for: {file_path}")
             tags = await tag_document_tool(file_path, pages=pages[:5])
             print(f"Generated tags: {tags}")
-            
+
             # Ingest all at once (since we already have them in memory)
             print(f"Ingesting pre-parsed text from: {file_path}")
-            result_msg = ingest_pages_tool(pages, source=file_path, tags=tags)
-            
-            # Calculate chunk count (rough estimate by re-chunking or parsing result string if possible)
-            # For simplicity, we re-chunk to count.
-            chunks = _chunk_pages(pages, file_path, tags=tags)
-            total_chunks_processed = len(chunks)
-            
+            total_chunks_processed = ingest_pages_tool(pages, source=file_path, tags=tags)
+
         else:
             # Get total pages for progress bar
             from src.pdf_parser import get_pdf_page_count
+            from concurrent.futures import ThreadPoolExecutor
             total_pages = get_pdf_page_count(local_path)
             print(f"Parsing and ingesting PDF in batches: {local_path} (Total pages estimate: {total_pages})")
-            
+
             page_generator = yield_pdf_pages(local_path)
             current_batch = []
             pages_for_tagging = []
+            tag_task = None  # async task for non-blocking tagging
 
             batch_num = 0
             pages_processed_count = 0
+            loop = asyncio.get_event_loop()
+            executor = ThreadPoolExecutor(max_workers=2)
+            pending_future = None  # pipeline: previous batch's embed/store future
 
             for page in page_generator:
                 current_batch.append(page)
@@ -269,43 +269,54 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
                 if len(pages_for_tagging) < 5:
                     pages_for_tagging.append(page)
 
-                # If we have enough pages for tagging and haven't tagged yet, do it now
-                if len(pages_for_tagging) == 5 and not tags:
-                    print(f"Generating tags for: {file_path}")
-                    tags = await tag_document_tool(file_path, pages=pages_for_tagging)
-                    print(f"Generated tags: {tags}")
+                # Kick off tagging in background (non-blocking)
+                if len(pages_for_tagging) == 5 and tag_task is None:
+                    print(f"Generating tags (background) for: {file_path}")
+                    tag_task = asyncio.create_task(tag_document_tool(file_path, pages=pages_for_tagging))
 
                 # Process batch
                 if len(current_batch) >= BATCH_SIZE:
                     batch_num += 1
-                    # If tags still empty (e.g. < 5 pages total so far), try generating with what we have
+
+                    # Wait for previous batch to finish (pipeline)
+                    if pending_future is not None:
+                        total_chunks_processed += await pending_future
+
+                    # Ensure tags are ready before first write
                     if not tags:
-                        print(f"Generating tags for: {file_path} (partial)")
-                        tags = await tag_document_tool(file_path, pages=pages_for_tagging)
+                        if tag_task is not None:
+                            tags = await tag_task
+                        else:
+                            tags = await tag_document_tool(file_path, pages=pages_for_tagging)
                         print(f"Generated tags: {tags}")
 
-                    print(f"Ingesting batch {batch_num} ({len(current_batch)} pages)...")
-                    ingest_pages_tool(current_batch, source=file_path, tags=tags)
-
-                    # Count chunks for metadata
-                    batch_chunks = _chunk_pages(current_batch, file_path, tags=tags)
-                    total_chunks_processed += len(batch_chunks)
+                    # Submit this batch to thread pool (embed + store in background)
+                    batch_to_process = current_batch
+                    print(f"Ingesting batch {batch_num} ({len(batch_to_process)} pages)...")
+                    pending_future = loop.run_in_executor(
+                        executor, ingest_pages_tool, batch_to_process, file_path, tags
+                    )
 
                     current_batch = []
+
+            # Wait for the last pipeline batch
+            if pending_future is not None:
+                total_chunks_processed += await pending_future
 
             # Process remaining pages
             if current_batch:
                 batch_num += 1
                 if not tags:
-                    print(f"Generating tags for: {file_path} (final)")
-                    tags = await tag_document_tool(file_path, pages=pages_for_tagging)
+                    if tag_task is not None:
+                        tags = await tag_task
+                    else:
+                        tags = await tag_document_tool(file_path, pages=pages_for_tagging)
                     print(f"Generated tags: {tags}")
 
                 print(f"Ingesting final batch {batch_num} ({len(current_batch)} pages)...")
-                ingest_pages_tool(current_batch, source=file_path, tags=tags)
+                total_chunks_processed += ingest_pages_tool(current_batch, source=file_path, tags=tags)
 
-                batch_chunks = _chunk_pages(current_batch, file_path, tags=tags)
-                total_chunks_processed += len(batch_chunks)
+            executor.shutdown(wait=False)
         
         # Save document metadata to database
         vector_store = get_session_vector_store()
@@ -347,7 +358,7 @@ def _extract_query_filters(query: str) -> Optional[Dict[str, Any]]:
         import json
         
         genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-        model = genai.GenerativeModel('gemini-2.0-flash-lite')
+        model = genai.GenerativeModel('gemini-2.5-flash-lite')
         
         prompt = f"""
         Analyze the search query and identify if the user is filtering by a specific topic, domain, or document type.
@@ -627,7 +638,7 @@ async def tag_document_tool(file_path: str, pages: Optional[List[str]] = None) -
         if not os.getenv("GOOGLE_API_KEY"):
             return "Error: GOOGLE_API_KEY not found."
         genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-        model = genai.GenerativeModel('gemini-2.0-flash-lite')
+        model = genai.GenerativeModel('gemini-2.5-flash-lite')
         
         prompt = f"""
         Analyze the following document text and generate 3-5 relevant tags.
@@ -713,7 +724,7 @@ async def highlight_document_tool(file_path: str, pages: Optional[List[str]] = N
         if not os.getenv("GOOGLE_API_KEY"):
             return "Error: GOOGLE_API_KEY not found."
         genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-        model = genai.GenerativeModel('gemini-2.0-flash-lite')
+        model = genai.GenerativeModel('gemini-2.5-flash-lite')
         
         # 2. Map Phase: Summarize chunks
         # Group pages into chunks of roughly 20k chars or 10 pages
