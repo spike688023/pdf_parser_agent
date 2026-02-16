@@ -112,6 +112,8 @@ with st.sidebar:
         if st.button("Process PDF", type="primary"):
             with PDF_PROCESS_TIME.time(): # Measure PDF processing time
                 with st.spinner("Processing PDF..."):
+                    import time as _time
+                    _pdf_start = _time.time()
                     # Update session activity
                     update_session_activity(st.session_state.session_id)
                     
@@ -150,7 +152,8 @@ with st.sidebar:
                         
                         try:
                             result = asyncio.run(process_pdf())
-                            st.success("✅ PDF processed successfully!")
+                            _pdf_elapsed = _time.time() - _pdf_start
+                            st.success(f"✅ PDF processed successfully! ({_pdf_elapsed:.1f}s)")
                             
                             # Clean up temp file
                             if os.path.exists(temp_path):
@@ -327,22 +330,5 @@ if prompt := st.chat_input("Ask a question about your documents"):
             st.error(f"An error occurred: {e}")
 
 
-# Display chat history in reverse order (newest first)
-# Logic: Iterate reversed, buffer Assistant message, display when User message is encountered
-# This ensures User-Assistant pairs are kept together and displayed in correct internal order (User -> Assistant)
 
-history_to_display = st.session_state.messages[:-2] if prompt else st.session_state.messages
-
-pending_assistant_message = None
-for message in reversed(history_to_display):
-    if message["role"] == "assistant":
-        pending_assistant_message = message
-    elif message["role"] == "user":
-        with st.chat_message("user"):
-            st.markdown(message["content"])
-        if pending_assistant_message:
-            with st.chat_message("assistant"):
-                st.markdown(pending_assistant_message["content"])
-            pending_assistant_message = None
-                
 

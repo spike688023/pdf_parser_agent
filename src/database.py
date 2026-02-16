@@ -344,7 +344,7 @@ class VectorStore:
                      response = self.qdrant_client.query_points(
                          collection_name=self.collection_name,
                          prefetch=prefetch,
-                         query=models.FusionQuery(method=models.Fusion.RRF),
+                         query=models.FusionQuery(fusion=models.Fusion.RRF),
                          limit=k
                      )
                      search_result = response.points

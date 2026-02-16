@@ -63,6 +63,10 @@ metadata:
   name: pdf-agent-service
 spec:
   type: LoadBalancer # 如果在本地測試可用 NodePort，GKE 上建議用 LoadBalancer
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600
   selector:
     app: pdf-agent
   ports:
