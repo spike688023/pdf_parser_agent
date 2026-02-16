@@ -120,20 +120,20 @@ with st.sidebar:
                         from src.gcs_storage import get_gcs_storage
                         gcs = get_gcs_storage()
 
-                        # Progress bar — covers the full pipeline
-                        progress_bar = st.progress(0, text="Uploading to Cloud Storage...")
-
                         # Upload file to GCS
                         destination_blob_name = f"uploads/{st.session_state.session_id}/{uploaded_file.name}"
+                        st.info("📤 Uploading to Cloud Storage...")
                         gcs_uri = gcs.upload_from_file_object(
                             file_obj=uploaded_file,
                             destination_blob_name=destination_blob_name
                         )
-                        progress_bar.progress(5 / 100, text="Uploaded — downloading for parsing...")
 
                         # Download to temp location for parsing
+                        st.info("📄 Parsing PDF...")
                         temp_path = gcs.download_to_temp(destination_blob_name)
-                        progress_bar.progress(10 / 100, text="Parsing PDF...")
+
+                        # Progress bar for the main processing loop
+                        progress_bar = st.progress(0, text="Processing: 0%")
                         
                         def update_progress(percent: int, status_text: str):
                             # Ensure percent is between 0 and 100
