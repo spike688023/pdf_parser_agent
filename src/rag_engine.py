@@ -176,7 +176,7 @@ def ingest_text_tool(text: str, source: str) -> str:
         return f"Error generating embeddings: {e}"
 
 # Tool for QAAgent to ingest a PDF file
-async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, original_filename: Optional[str] = None) -> str:
+async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, original_filename: Optional[str] = None, progress_callback: Optional[Any] = None) -> str:
     """
     Ingests a PDF file into the knowledge base using batch processing.
     Supports both local paths and GCS URIs (gs://bucket-name/path/to/file.pdf).
@@ -185,6 +185,7 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
         file_path: The absolute path to the PDF file or GCS URI.
         pages: Optional pre-parsed pages (if provided, batching is skipped for parsing but still used for ingestion).
         original_filename: Optional original filename (for display purposes).
+        progress_callback: Optional callable to update UI progress (takes percentage 0-100 and status text).
         
     Returns:
         A message indicating success or failure.
@@ -245,67 +246,85 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
             total_pages = get_pdf_page_count(local_path)
             print(f"Parsing and ingesting PDF in batches: {local_path} (Total pages estimate: {total_pages})")
             
+            # Progress weighting: 10-15% tagging, 15-95% page processing, 95-100% saving metadata
+            PROGRESS_TAG_START = 10
+            PROGRESS_TAG_END = 15
+            PROGRESS_PAGES_START = 15
+            PROGRESS_PAGES_END = 95
+
             page_generator = yield_pdf_pages(local_path)
             current_batch = []
             pages_for_tagging = []
-            
+
             batch_num = 0
             pages_processed_count = 0
-            
+
             for page in page_generator:
                 current_batch.append(page)
                 pages_processed_count += 1
-                
-                # Progress logging
-                if total_pages > 0 and (pages_processed_count % 5 == 0 or pages_processed_count == total_pages):
-                    percent = (pages_processed_count / total_pages) * 100
-                    print(f"Processing PDF progress: {pages_processed_count}/{total_pages} pages ({percent:.1f}%)")
-                
+
+                # Progress logging — update on every page
+                if total_pages > 0:
+                    page_progress = pages_processed_count / total_pages
+                    percent = PROGRESS_PAGES_START + page_progress * (PROGRESS_PAGES_END - PROGRESS_PAGES_START)
+                    status_msg = f"Processing: {pages_processed_count}/{total_pages} pages ({percent:.0f}%)"
+                    print(status_msg)
+                    if progress_callback:
+                        progress_callback(int(percent), status_msg)
+
                 # Collect first few pages for tagging
                 if len(pages_for_tagging) < 5:
                     pages_for_tagging.append(page)
-                    
+
                 # If we have enough pages for tagging and haven't tagged yet, do it now
                 if len(pages_for_tagging) == 5 and not tags:
+                    if progress_callback:
+                        progress_callback(PROGRESS_TAG_START, "Auto-tagging document...")
                     print(f"Generating tags for: {file_path}")
                     tags = await tag_document_tool(file_path, pages=pages_for_tagging)
                     print(f"Generated tags: {tags}")
-                
+                    if progress_callback:
+                        progress_callback(PROGRESS_TAG_END, "Tagging complete")
+
                 # Process batch
                 if len(current_batch) >= BATCH_SIZE:
                     batch_num += 1
                     # If tags still empty (e.g. < 5 pages total so far), try generating with what we have
                     if not tags:
+                        if progress_callback:
+                            progress_callback(PROGRESS_TAG_START, "Auto-tagging document...")
                         print(f"Generating tags for: {file_path} (partial)")
                         tags = await tag_document_tool(file_path, pages=pages_for_tagging)
                         print(f"Generated tags: {tags}")
 
                     print(f"Ingesting batch {batch_num} ({len(current_batch)} pages)...")
-                    # ingest_pages_tool returns a string message, we need to handle it or modify it.
-                    # For now just call it and assume it works.
                     ingest_pages_tool(current_batch, source=file_path, tags=tags)
-                    
+
                     # Count chunks for metadata
                     batch_chunks = _chunk_pages(current_batch, file_path, tags=tags)
                     total_chunks_processed += len(batch_chunks)
-                    
+
                     current_batch = []
-                    
+
             # Process remaining pages
             if current_batch:
                 batch_num += 1
                 if not tags:
+                    if progress_callback:
+                        progress_callback(PROGRESS_TAG_START, "Auto-tagging document...")
                     print(f"Generating tags for: {file_path} (final)")
                     tags = await tag_document_tool(file_path, pages=pages_for_tagging)
                     print(f"Generated tags: {tags}")
-                    
+
                 print(f"Ingesting final batch {batch_num} ({len(current_batch)} pages)...")
                 ingest_pages_tool(current_batch, source=file_path, tags=tags)
-                
+
                 batch_chunks = _chunk_pages(current_batch, file_path, tags=tags)
                 total_chunks_processed += len(batch_chunks)
         
         # Save document metadata to database
+        if progress_callback:
+            progress_callback(95, "Saving document metadata...")
         vector_store = get_session_vector_store()
         if vector_store:
             vector_store.save_document_metadata(
@@ -317,6 +336,8 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
                 chunk_count=total_chunks_processed
             )
         
+        if progress_callback:
+            progress_callback(100, "PDF processing complete!")
         return f"Successfully ingested PDF: {file_path}. Total chunks: {total_chunks_processed}. Tags: {tags}"
         
     except Exception as e:

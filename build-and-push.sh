@@ -30,13 +30,25 @@ echo "=== Cleaning up old images (keeping latest 3) ==="
 IMAGE_PATH="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE}"
 
 # List all digests sorted by creation time (newest first), skip top 3, and delete the rest
-gcloud artifacts docker images list "${IMAGE_PATH}" \
+# List all digests sorted by creation time (newest first)
+echo "Fetching image list..."
+DIGESTS=$(gcloud artifacts docker images list "${IMAGE_PATH}" \
   --sort-by=~create_time \
-  --format="value(digest)" | \
-  tail -n +4 | \
-  while read -r digest; do
-    echo "Deleting old image digest: ${digest}"
+  --format="value(digest)")
+
+COUNT=0
+for digest in $DIGESTS; do
+  COUNT=$((COUNT + 1))
+  if [ "$COUNT" -gt 3 ]; then
+    echo "Deleting old image digest (${COUNT}): ${digest}"
     gcloud artifacts docker images delete "${IMAGE_PATH}@${digest}" --delete-tags --quiet
-  done
+  else
+    echo "Keeping image digest (${COUNT}): ${digest}"
+  fi
+done
 
 echo "=== Cleanup complete ==="
+
+echo "=== Restarting PDF Agent Pods ==="
+kubectl rollout restart deployment/pdf-agent
+echo "=== Rollout initiated ==="
