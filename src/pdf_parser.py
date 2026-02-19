@@ -68,9 +68,23 @@ def yield_pdf_pages(pdf_path: str):
 def get_pdf_page_count(pdf_path: str) -> int:
     """
     Get the total number of pages in a PDF file efficiently.
-    Used for progress tracking.
+    Uses pdfplumber's lazy page list (no full parse) to count pages.
     """
     try:
+        import struct
+        # Fast method: read PDF trailer for /Count without full parse
+        with open(pdf_path, 'rb') as f:
+            # Search last 1KB for page count in PDF cross-reference
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 2048))
+            trailer = f.read()
+            # Look for /N (page count in linearized PDF) or fall back
+            import re
+            match = re.search(rb'/N\s+(\d+)', trailer)
+            if match:
+                return int(match.group(1))
+        # Fallback: use pdfplumber (loads structure but we close immediately)
         with pdfplumber.open(pdf_path) as pdf:
             return len(pdf.pages)
     except Exception as e:

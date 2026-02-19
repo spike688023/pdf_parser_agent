@@ -216,7 +216,7 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
         
         tags = ""
         total_chunks_processed = 0
-        BATCH_SIZE = 25  # Pod has ~1.7Gi headroom (4Gi limit, ~2.3Gi used); 25 pages ≈ few MB per batch
+        BATCH_SIZE = 10  # Smaller batches to limit peak memory; gc.collect() runs between batches
         
         # Strategy:
         # 1. If 'pages' provided (legacy/small doc), use it directly.
@@ -243,6 +243,7 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
             total_pages = get_pdf_page_count(local_path)
             print(f"Parsing and ingesting PDF in batches: {local_path} (Total pages estimate: {total_pages})")
 
+            import gc
             page_generator = yield_pdf_pages(local_path)
             current_batch = []
             pages_for_tagging = []
@@ -251,7 +252,7 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
             batch_num = 0
             pages_processed_count = 0
             loop = asyncio.get_event_loop()
-            executor = ThreadPoolExecutor(max_workers=2)
+            executor = ThreadPoolExecutor(max_workers=1)
             pending_future = None  # pipeline: previous batch's embed/store future
 
             for page in page_generator:
@@ -282,6 +283,7 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
                     # Wait for previous batch to finish (pipeline)
                     if pending_future is not None:
                         total_chunks_processed += await pending_future
+                        gc.collect()
 
                     # Ensure tags are ready before first write
                     if not tags:
@@ -303,6 +305,7 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
             # Wait for the last pipeline batch
             if pending_future is not None:
                 total_chunks_processed += await pending_future
+                gc.collect()
 
             # Process remaining pages
             if current_batch:
@@ -317,7 +320,7 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
                 print(f"Ingesting final batch {batch_num} ({len(current_batch)} pages)...")
                 total_chunks_processed += ingest_pages_tool(current_batch, source=file_path, tags=tags, document_id=document_id)
 
-            executor.shutdown(wait=False)
+            executor.shutdown(wait=True)
         
         # Save document metadata to database
         vector_store = get_session_vector_store()
@@ -331,12 +334,21 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
             )
         
         return f"Successfully ingested PDF: {file_path}. Total chunks: {total_chunks_processed}. Tags: {tags}"
-        
+
     except Exception as e:
         import traceback
         traceback.print_exc()
         return f"Error ingesting PDF: {str(e)}"
     finally:
+        # Force memory release
+        import gc
+        import ctypes
+        gc.collect()
+        # Ask glibc to return freed memory to OS (Linux only)
+        try:
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception:
+            pass
         # Cleanup temp file if we downloaded from GCS
         if temp_file and os.path.exists(temp_file):
             try:
