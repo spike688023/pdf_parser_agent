@@ -56,8 +56,8 @@ class FirestoreDB:
                 "last_accessed": now
             })
 
-    def save_document_metadata(self, document_id: str, document_name: str, file_path: str, 
-                               tags: str = "", highlights: str = "", chunk_count: int = 0):
+    def save_document_metadata(self, document_id: str, document_name: str, file_path: str,
+                               tags: str = "", chunk_count: int = 0):
         """Save document metadata to Firestore."""
         if not self.session_id:
             logger.warning("No session_id provided for save_document_metadata")
@@ -65,13 +65,12 @@ class FirestoreDB:
 
         doc_ref = self.client.collection("sessions").document(self.session_id)\
                              .collection("documents").document(document_id)
-        
+
         doc_ref.set({
             "document_id": document_id,
             "document_name": document_name,
             "file_path": file_path,
             "tags": tags,
-            "highlights": highlights,
             "upload_time": datetime.now().isoformat(),
             "chunk_count": chunk_count
         })

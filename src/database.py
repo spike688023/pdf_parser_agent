@@ -422,21 +422,21 @@ class VectorStore:
     def save_index(self):
         faiss.write_index(self.index, self.index_path)
     
-    def save_document_metadata(self, document_id: str, document_name: str, file_path: str, 
-                               tags: str = "", highlights: str = "", chunk_count: int = 0):
+    def save_document_metadata(self, document_id: str, document_name: str, file_path: str,
+                               tags: str = "", chunk_count: int = 0):
         """Save or update document metadata"""
         if self.use_firestore and self.firestore_db:
             self.firestore_db.save_document_metadata(
-                document_id, document_name, file_path, tags, highlights, chunk_count
+                document_id, document_name, file_path, tags, chunk_count
             )
         else:
             from datetime import datetime
             cursor = self.conn.cursor()
             cursor.execute("""
-                INSERT OR REPLACE INTO documents 
-                (document_id, document_name, file_path, tags, highlights, upload_time, chunk_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (document_id, document_name, file_path, tags, highlights, 
+                INSERT OR REPLACE INTO documents
+                (document_id, document_name, file_path, tags, upload_time, chunk_count)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (document_id, document_name, file_path, tags,
                   datetime.now().isoformat(), chunk_count))
             self.conn.commit()
     

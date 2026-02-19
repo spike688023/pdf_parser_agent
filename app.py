@@ -195,6 +195,12 @@ with st.sidebar:
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
+        if message.get("sources"):
+            with st.expander("📚 參考來源 (Retrieved Sources)", expanded=False):
+                for i, ctx in enumerate(message["sources"]):
+                    st.markdown(f"**檢索結果 #{i+1}:**")
+                    st.markdown(ctx)
+                    st.divider()
 
 # Chat input at the top for easy access
 if prompt := st.chat_input("Ask a question about your documents"):
@@ -244,7 +250,7 @@ if prompt := st.chat_input("Ask a question about your documents"):
             
             # Container for displaying tool outputs (sources)
             source_container = st.empty()
-            retrieved_context = []
+            st.session_state._pending_context = []
 
             start_time = time.time() # Start timing manually for async generator
             has_yielded_text = False
@@ -276,8 +282,8 @@ if prompt := st.chat_input("Ask a question about your documents"):
                     if tool_output:
                         output_str = str(tool_output)
                         # Filter to only show relevant context retrieval output (heuristic)
-                        if "Source" in output_str or "Document" in output_str or "Highlights" in output_str:
-                            retrieved_context.append(output_str)
+                        if "Source" in output_str or "Document" in output_str:
+                            st.session_state._pending_context.append(output_str)
 
                     # Handle ADK Event structure for Model Response
                     if hasattr(event, 'content') and event.content:
@@ -298,12 +304,12 @@ if prompt := st.chat_input("Ask a question about your documents"):
                             yield event.part.text
 
                 # Fallback: if model returned empty content but we have retrieved context
-                if not has_yielded_text and retrieved_context:
+                if not has_yielded_text and st.session_state._pending_context:
                     logging.warning("LLM returned empty response. Using fallback direct model call.")
                     try:
                         import google.generativeai as genai
                         fallback_model = genai.GenerativeModel('gemini-2.5-flash')
-                        context_text = "\n\n".join(retrieved_context)
+                        context_text = "\n\n".join(st.session_state._pending_context)
                         fallback_prompt = f"""Based on the following context, answer the user's question.
 
 Context:
@@ -340,10 +346,10 @@ Please provide a comprehensive answer in the same language as the question. If t
                             logging.warning(f"Error closing client: {e}")
                 
                 # Display collected context in an expander
-                if retrieved_context:
+                if st.session_state._pending_context:
                     with source_container:
                         with st.expander("📚 參考來源 (Retrieved Sources)", expanded=False):
-                            for i, ctx in enumerate(retrieved_context):
+                            for i, ctx in enumerate(st.session_state._pending_context):
                                 st.markdown(f"**檢索結果 #{i+1}:**")
                                 st.markdown(ctx)
                                 st.divider()
@@ -351,7 +357,12 @@ Please provide a comprehensive answer in the same language as the question. If t
         # st.write_stream handles the async generator
         try:
             response = st.write_stream(run_agent_stream)
-            st.session_state.messages.append({"role": "assistant", "content": response})
+            sources = list(st.session_state.get("_pending_context", []))
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": response,
+                "sources": sources,
+            })
         except Exception as e:
             logging.error(f"Error during agent execution: {e}", exc_info=True)
             st.error(f"An error occurred: {e}")

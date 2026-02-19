@@ -324,9 +324,8 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
             vector_store.save_document_metadata(
                 document_id=document_id,
                 document_name=document_name,
-                file_path=file_path,  # Store original path (GCS URI or local)
+                file_path=file_path,
                 tags=tags,
-                highlights="",  # Will be generated separately
                 chunk_count=total_chunks_processed
             )
         
@@ -439,21 +438,9 @@ def retrieve_context_tool(query: str) -> str:
             return "No relevant context found."
         
         context_str = ""
-        seen_docs = set()
-        
         for i, chunk in enumerate(results):
             page_num = chunk.get('page_number', 'Unknown')
             doc_name = chunk.get('document_name', 'Unknown')
-            doc_id = chunk.get('document_id')
-            
-            # Add document highlights if not already added
-            vector_store = get_session_vector_store()
-            if doc_id and doc_id not in seen_docs and vector_store:
-                doc_meta = vector_store.get_document_metadata(doc_id)
-                if doc_meta and doc_meta.get('highlights'):
-                    context_str += f"[Document Summary & Highlights for {doc_name}]:\n{doc_meta['highlights']}\n\n"
-                seen_docs.add(doc_id)
-            
             context_str += f"[Source {i+1} - {doc_name}, Page {page_num}]:\n{chunk['text']}\n\n"
         return context_str
             
@@ -464,15 +451,15 @@ def retrieve_context_tool(query: str) -> str:
 # Tool to list all documents and their summaries
 def list_documents_tool(document_names: Optional[List[str]] = None) -> str:
     """
-    Lists documents in the knowledge base with their summaries/highlights.
-    
+    Lists documents in the knowledge base with their metadata.
+
     Args:
         document_names: Optional list of specific document names to retrieve.
                        If None or empty, returns all documents.
                        Example: ["Agent Quality.pdf", "Context Engineering.pdf"]
-    
+
     Returns:
-        Formatted string with document information including highlights.
+        Formatted string with document information including tags and chunk counts.
     """
     try:
         vector_store = get_session_vector_store()
@@ -497,10 +484,8 @@ def list_documents_tool(document_names: Optional[List[str]] = None) -> str:
             result += f"📄 **{doc['document_name']}**\n"
             if doc.get('tags'):
                 result += f"🏷️ Tags: {doc['tags']}\n"
-            if doc.get('highlights'):
-                result += f"✨ Highlights:\n{doc['highlights']}\n"
-            else:
-                result += "✨ Highlights: Not generated yet.\n"
+            if doc.get('chunk_count'):
+                result += f"📊 Chunks: {doc['chunk_count']}\n"
             result += "\n" + "="*50 + "\n\n"
             
         return result
@@ -681,174 +666,3 @@ async def tag_document_tool(file_path: str, pages: Optional[List[str]] = None) -
             except Exception:
                 pass
 
-# Tool for Auto-Highlighting
-async def highlight_document_tool(file_path: str, pages: Optional[List[str]] = None) -> str:
-    """
-    Extracts key points and highlights from a PDF file using Map-Reduce for large docs.
-    Supports both local paths and GCS URIs.
-    
-    Args:
-        file_path: The absolute path to the PDF file or GCS URI.
-        pages: Optional pre-parsed pages to avoid re-parsing.
-        
-    Returns:
-        A formatted string containing key points and highlights.
-    """
-    local_path = file_path
-    temp_file = None
-    
-    try:
-        # Handle GCS URIs - download to temp location
-        vector_store = get_session_vector_store()
-        if vector_store and vector_store.is_gcs_uri(file_path):
-            print(f"Downloading from GCS for highlighting: {file_path}")
-            local_path = vector_store.get_local_path(file_path)
-            temp_file = local_path
-        # Handle local path resolution
-        elif not os.path.exists(file_path) and os.path.exists(os.path.join("uploads", file_path)):
-            local_path = os.path.join("uploads", file_path)
-        
-        # 1. Parse PDF (if not provided)
-        if pages is None:
-            print(f"Parsing PDF for highlighting: {local_path}")
-            pages = parse_pdf_file(local_path)
-        else:
-            print(f"Using pre-parsed pages for highlighting: {file_path}")
-        
-        if isinstance(pages, str):
-            return f"Failed to parse PDF: {pages}"
-            
-        if not pages:
-            return "No text extracted from PDF."
-            
-        if not os.getenv("GOOGLE_API_KEY"):
-            return "Error: GOOGLE_API_KEY not found."
-        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-        model = genai.GenerativeModel('gemini-2.5-flash-lite')
-        
-        # 2. Map Phase: Summarize chunks
-        # Group pages into chunks of roughly 20k chars or 10 pages
-        chunks = []
-        current_chunk = ""
-        page_count = 0
-        
-        for _, page_text in pages:
-            if len(current_chunk) + len(page_text) > 20000 or page_count >= 10:
-                chunks.append(current_chunk)
-                current_chunk = ""
-                page_count = 0
-            current_chunk += page_text + "\n"
-            page_count += 1
-            
-        if current_chunk:
-            chunks.append(current_chunk)
-            
-        print(f"Document split into {len(chunks)} chunks for processing.")
-        
-        print(f"Document split into {len(chunks)} chunks for processing. Starting parallel execution...")
-        
-        async def process_chunk(chunk, index):
-            print(f"Processing chunk {index+1}/{len(chunks)}...")
-            prompt = f"""
-            Analyze the following text segment from a larger document.
-            Extract the key points, important definitions, and main ideas.
-            Be concise.
-            
-            Text Segment:
-            {chunk}
-            """
-            try:
-                response = await asyncio.to_thread(model.generate_content, prompt)
-                return response.text
-            except Exception as api_error:
-                error_str = str(api_error)
-                if "429" in error_str or "quota" in error_str.lower():
-                    print(f"⚠️ Quota exceeded for chunk {index+1}")
-                    return "" # Return empty string on failure to allow others to proceed
-                else:
-                    print(f"❌ Error processing chunk {index+1}: {api_error}")
-                    return ""
-
-        # Fire all requests in parallel
-        partial_summaries = await asyncio.gather(*[process_chunk(chunk, i) for i, chunk in enumerate(chunks)])
-        partial_summaries = [s for s in partial_summaries if s] # Filter out failures
-            
-        # 3. Reduce Phase: Combine summaries
-        combined_summary = "\n\n".join(partial_summaries)
-        
-        print("Generating final highlights...")
-        final_prompt = f"""
-        You are an expert analyst. I have analyzed a large document in segments and extracted the following partial summaries.
-        Please synthesize these partial summaries into a coherent, structured list of "Key Highlights" and "Key Terms" for the entire document.
-        
-        Partial Summaries:
-        {combined_summary}
-        
-        Format the output as:
-        # Key Highlights
-        - [Point 1]
-        - [Point 2]
-        ...
-        
-        # Key Terms
-        - [Term]: [Definition]
-        ...
-        """
-        
-        try:
-            final_response = await asyncio.to_thread(model.generate_content, final_prompt)
-            highlights_text = final_response.text
-            
-            # Save highlights to database metadata
-            import hashlib
-            document_id = hashlib.md5(file_path.encode()).hexdigest()[:16]
-            
-            # Get existing metadata and save highlights
-            vector_store = get_session_vector_store()
-            if vector_store:
-                existing = vector_store.get_document_metadata(document_id)
-                if existing:
-                    vector_store.save_document_metadata(
-                        document_id=document_id,
-                        document_name=existing["document_name"],
-                        file_path=file_path,  # Store original path (GCS URI or local)
-                        tags=existing.get("tags", ""),
-                        highlights=highlights_text,
-                        chunk_count=existing.get("chunk_count", 0)
-                    )
-            
-            return highlights_text
-        except Exception as api_error:
-            error_str = str(api_error)
-            if "429" in error_str or "quota" in error_str.lower():
-                import re
-                retry_match = re.search(r'retry in (\d+(?:\.\d+)?)', error_str, re.IGNORECASE)
-                if retry_match:
-                    retry_seconds = int(float(retry_match.group(1)))
-                    return f"⏳ API quota exceeded during final synthesis. Please wait {retry_seconds} seconds and try again."
-                else:
-                    return "⏳ API quota exceeded. Please wait a moment and try again."
-            else:
-                raise
-        
-    except Exception as e:
-        return f"Error generating highlights: {str(e)}"
-    finally:
-        # Cleanup temp file if we downloaded from GCS
-        if temp_file and os.path.exists(temp_file):
-            try:
-                os.unlink(temp_file)
-                print(f"Cleaned up temp file: {temp_file}")
-            except Exception:
-                pass
-
-# Highlighter Agent
-highlighter_agent = Agent(
-    name="HighlighterAgent",
-    model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
-    instruction="""You are an AI assistant specialized in extracting key points and highlights from documents.
-    Use the highlight_document_tool to process the provided file path and return the extracted highlights.
-    """,
-    tools=[FunctionTool(highlight_document_tool)],
-    output_key="highlights"
-)
