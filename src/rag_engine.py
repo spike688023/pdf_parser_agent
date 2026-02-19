@@ -130,7 +130,7 @@ Ranking (indices only, comma-separated):"""
         return list(range(len(documents)))
 
 # ======== RAG Tools ========
-def ingest_pages_tool(pages: List[tuple], source: str, tags: str = "") -> int:
+def ingest_pages_tool(pages: List[tuple], source: str, tags: str = "", document_id: Optional[str] = None) -> int:
     """
     Chunks pages (with page numbers), generates embeddings, and stores them in the database.
 
@@ -138,6 +138,7 @@ def ingest_pages_tool(pages: List[tuple], source: str, tags: str = "") -> int:
         pages: List of (page_number, text) tuples
         source: Source file path
         tags: Comma-separated tags
+        document_id: Optional pre-computed document ID (content hash)
 
     Returns:
         Number of chunks processed.
@@ -145,7 +146,7 @@ def ingest_pages_tool(pages: List[tuple], source: str, tags: str = "") -> int:
     if not pages:
         return 0
 
-    chunks = _chunk_pages(pages, source, tags=tags)
+    chunks = _chunk_pages(pages, source, tags=tags, document_id=document_id)
     texts = [chunk["text"] for chunk in chunks]
 
     # Generate embeddings using NIM
@@ -176,7 +177,7 @@ def ingest_text_tool(text: str, source: str) -> str:
         return f"Error generating embeddings: {e}"
 
 # Tool for QAAgent to ingest a PDF file
-async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, original_filename: Optional[str] = None, progress_callback: Optional[Any] = None) -> str:
+async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, original_filename: Optional[str] = None, progress_callback: Optional[Any] = None, content_hash: Optional[str] = None) -> str:
     """
     Ingests a PDF file into the knowledge base using batch processing.
     Supports both local paths and GCS URIs (gs://bucket-name/path/to/file.pdf).
@@ -210,7 +211,7 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
         
         # Determine document identification
         import hashlib
-        document_id = hashlib.md5(file_path.encode()).hexdigest()[:16]
+        document_id = content_hash if content_hash else hashlib.md5(file_path.encode()).hexdigest()[:16]
         document_name = original_filename if original_filename else os.path.basename(file_path)
         
         tags = ""
@@ -233,7 +234,7 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
 
             # Ingest all at once (since we already have them in memory)
             print(f"Ingesting pre-parsed text from: {file_path}")
-            total_chunks_processed = ingest_pages_tool(pages, source=file_path, tags=tags)
+            total_chunks_processed = ingest_pages_tool(pages, source=file_path, tags=tags, document_id=document_id)
 
         else:
             # Get total pages for progress bar
@@ -294,7 +295,7 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
                     batch_to_process = current_batch
                     print(f"Ingesting batch {batch_num} ({len(batch_to_process)} pages)...")
                     pending_future = loop.run_in_executor(
-                        executor, ingest_pages_tool, batch_to_process, file_path, tags
+                        executor, ingest_pages_tool, batch_to_process, file_path, tags, document_id
                     )
 
                     current_batch = []
@@ -314,7 +315,7 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
                     print(f"Generated tags: {tags}")
 
                 print(f"Ingesting final batch {batch_num} ({len(current_batch)} pages)...")
-                total_chunks_processed += ingest_pages_tool(current_batch, source=file_path, tags=tags)
+                total_chunks_processed += ingest_pages_tool(current_batch, source=file_path, tags=tags, document_id=document_id)
 
             executor.shutdown(wait=False)
         
@@ -492,22 +493,23 @@ def list_documents_tool(document_names: Optional[List[str]] = None) -> str:
     except Exception as e:
         return f"Error listing documents: {e}"
 
-def _chunk_pages(pages: List[tuple], source: str, tags: str = "", chunk_size: int = 1000, chunk_overlap: int = 200) -> List[Dict[str, Any]]:
+def _chunk_pages(pages: List[tuple], source: str, tags: str = "", chunk_size: int = 1000, chunk_overlap: int = 200, document_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Chunks pages while preserving page numbers and document metadata.
-    
+
     Args:
         pages: List of (page_number, text) tuples
         source: Source file path
         tags: Comma-separated tags
         chunk_size: Maximum characters per chunk
         chunk_overlap: Overlap between chunks
+        document_id: Optional pre-computed document ID (content hash)
     """
     import os
     import hashlib
-    
-    # Generate document_id from source path (hash for uniqueness)
-    document_id = hashlib.md5(source.encode()).hexdigest()[:16]
+
+    if not document_id:
+        document_id = hashlib.md5(source.encode()).hexdigest()[:16]
     
     # Extract document_name from source path
     document_name = os.path.basename(source)

@@ -113,10 +113,28 @@ with st.sidebar:
             with PDF_PROCESS_TIME.time(): # Measure PDF processing time
                 with st.spinner("Processing PDF..."):
                     import time as _time
+                    import hashlib as _hashlib
                     _pdf_start = _time.time()
                     # Update session activity
                     update_session_activity(st.session_state.session_id)
-                    
+
+                    # Compute content hash for dedup
+                    file_bytes = uploaded_file.getvalue()
+                    content_hash = _hashlib.sha256(file_bytes).hexdigest()[:16]
+                    uploaded_file.seek(0)  # Reset for later upload
+
+                    # Check for duplicate
+                    existing_doc = None
+                    if st.session_state.session_vector_store:
+                        existing_doc = st.session_state.session_vector_store.get_document_metadata(content_hash)
+                    if existing_doc:
+                        tags = existing_doc.get('tags', '')
+                        msg = f"⚠️ 此檔案已上傳過：**{existing_doc.get('document_name', '')}**"
+                        if tags:
+                            msg += f"\n\n🏷️ Tags: {tags}"
+                        st.warning(msg)
+                        st.stop()
+
                     # Upload to GCS
                     try:
                         from src.gcs_storage import get_gcs_storage
@@ -144,10 +162,11 @@ with st.sidebar:
                             
                         async def process_pdf():
                             return await ingest_pdf_tool(
-                                gcs_uri, 
-                                pages=None, # Let the tool parse incrementally!
+                                gcs_uri,
+                                pages=None,
                                 original_filename=uploaded_file.name,
-                                progress_callback=update_progress
+                                progress_callback=update_progress,
+                                content_hash=content_hash
                             )
                         
                         try:
