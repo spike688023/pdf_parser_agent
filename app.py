@@ -123,25 +123,25 @@ with st.sidebar:
                     content_hash = _hashlib.sha256(file_bytes).hexdigest()[:16]
                     uploaded_file.seek(0)  # Reset for later upload
 
-                    # Check for duplicate
-                    existing_doc = None
-                    if st.session_state.session_vector_store:
-                        existing_doc = st.session_state.session_vector_store.get_document_metadata(content_hash)
-                    if existing_doc:
-                        tags = existing_doc.get('tags', '')
-                        msg = f"⚠️ 此檔案已上傳過：**{existing_doc.get('document_name', '')}**"
-                        if tags:
-                            msg += f"\n\n🏷️ Tags: {tags}"
-                        st.warning(msg)
-                        st.stop()
-
-                    # Upload to GCS
+                    # Upload to GCS (using content_hash as folder for dedup)
                     try:
                         from src.gcs_storage import get_gcs_storage
                         gcs = get_gcs_storage()
 
-                        # Upload file to GCS
-                        destination_blob_name = f"uploads/{st.session_state.session_id}/{uploaded_file.name}"
+                        destination_blob_name = f"uploads/{content_hash}/{uploaded_file.name}"
+
+                        # Check for duplicate via GCS (survives pod restarts)
+                        if gcs.file_exists(destination_blob_name):
+                            # Try to show tags from local DB if available
+                            existing_doc = None
+                            if st.session_state.session_vector_store:
+                                existing_doc = st.session_state.session_vector_store.get_document_metadata(content_hash)
+                            tags = existing_doc.get('tags', '') if existing_doc else ''
+                            msg = f"⚠️ 此檔案已上傳過：**{uploaded_file.name}**"
+                            if tags:
+                                msg += f"\n\n🏷️ Tags: {tags}"
+                            st.warning(msg)
+                            st.stop()
                         st.info("📤 Uploading to Cloud Storage...")
                         gcs_uri = gcs.upload_from_file_object(
                             file_obj=uploaded_file,
