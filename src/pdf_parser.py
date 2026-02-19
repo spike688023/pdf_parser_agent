@@ -48,7 +48,6 @@ def yield_pdf_pages(pdf_path: str):
                     tables = page.extract_tables()
                     if tables:
                         page_text += "\n\n--- TABLES ON THIS PAGE ---\n"
-                        # Use the helper function (which we need to make sure is available)
                         for table_idx, table in enumerate(tables):
                             page_text += f"\n[Table {table_idx + 1}]\n"
                             page_text += _format_table(table)
@@ -60,31 +59,118 @@ def yield_pdf_pages(pdf_path: str):
                     yield (page_num, page_text)
                     
     except Exception as e:
-        # We can't easily return an error string in a generator of tuples without breaking type expectations
-        # So we log and re-raise or yield a special error page
         logging.error(f"Error parsing PDF: {e}")
         raise e
 
+
+def _parse_page_range(args: tuple) -> list:
+    """
+    Parse a range of pages from a PDF file. Runs in a separate process.
+    Each process opens its own pdfplumber handle to avoid GIL / shared state.
+    
+    Args:
+        args: (pdf_path, start_page_idx, end_page_idx)  — 0-based indices, end exclusive
+    
+    Returns:
+        List of (page_number, text) tuples (1-based page numbers)
+    """
+    pdf_path, start_idx, end_idx = args
+    results = []
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for i in range(start_idx, min(end_idx, len(pdf.pages))):
+                page = pdf.pages[i]
+                if not page:
+                    continue
+
+                page_num = i + 1
+                page_text = page.extract_text() or ""
+
+                # Extract tables
+                try:
+                    tables = page.extract_tables()
+                    if tables:
+                        page_text += "\n\n--- TABLES ON THIS PAGE ---\n"
+                        for table_idx, table in enumerate(tables):
+                            page_text += f"\n[Table {table_idx + 1}]\n"
+                            # Inline table formatting (can't call _format_table across processes)
+                            if table:
+                                filtered = [row for row in table if row and any(cell for cell in row)]
+                                for row in filtered:
+                                    row_str = " | ".join(str(cell) if cell else "" for cell in row)
+                                    page_text += row_str + "\n"
+                except Exception:
+                    pass
+
+                if page_text.strip():
+                    results.append((page_num, page_text))
+    except Exception as e:
+        print(f"Error parsing pages {start_idx}-{end_idx}: {e}")
+    return results
+
+
+def parallel_parse_pdf(pdf_path: str, num_workers: int = None) -> list:
+    """
+    Parse an entire PDF using multiple processes for speed.
+    Splits page ranges across CPU cores, each opening its own pdfplumber handle.
+    
+    Args:
+        pdf_path: Path to the PDF file
+        num_workers: Number of parallel workers (default: cpu_count, capped at 4)
+    
+    Returns:
+        List of (page_number, text) tuples sorted by page number
+    """
+    import os
+    from concurrent.futures import ProcessPoolExecutor
+    
+    total_pages = get_pdf_page_count(pdf_path)
+    if total_pages == 0:
+        # Fallback: try pdfplumber directly
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                total_pages = len(pdf.pages)
+        except Exception:
+            return list(yield_pdf_pages(pdf_path))
+    
+    if num_workers is None:
+        num_workers = min(os.cpu_count() or 2, 4)  # cap at 4 to avoid OOM
+    
+    # For small PDFs, don't bother with multiprocessing overhead
+    if total_pages <= 20 or num_workers <= 1:
+        return list(yield_pdf_pages(pdf_path))
+    
+    # Split pages into ranges
+    pages_per_worker = max(1, total_pages // num_workers)
+    ranges = []
+    for start in range(0, total_pages, pages_per_worker):
+        end = min(start + pages_per_worker, total_pages)
+        ranges.append((pdf_path, start, end))
+    
+    print(f"🚀 Parallel PDF parse: {total_pages} pages across {len(ranges)} workers")
+    
+    all_pages = []
+    try:
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            results = list(executor.map(_parse_page_range, ranges))
+        
+        for chunk in results:
+            all_pages.extend(chunk)
+        
+        # Sort by page number (workers may return out of order)
+        all_pages.sort(key=lambda x: x[0])
+        print(f"✅ Parallel parse done: {len(all_pages)} pages extracted")
+    except Exception as e:
+        print(f"⚠️ Parallel parse failed ({e}), falling back to serial")
+        all_pages = list(yield_pdf_pages(pdf_path))
+    
+    return all_pages
+
 def get_pdf_page_count(pdf_path: str) -> int:
     """
-    Get the total number of pages in a PDF file efficiently.
-    Uses pdfplumber's lazy page list (no full parse) to count pages.
+    Get the total number of pages in a PDF file.
     """
     try:
-        import struct
-        # Fast method: read PDF trailer for /Count without full parse
-        with open(pdf_path, 'rb') as f:
-            # Search last 1KB for page count in PDF cross-reference
-            f.seek(0, 2)
-            size = f.tell()
-            f.seek(max(0, size - 2048))
-            trailer = f.read()
-            # Look for /N (page count in linearized PDF) or fall back
-            import re
-            match = re.search(rb'/N\s+(\d+)', trailer)
-            if match:
-                return int(match.group(1))
-        # Fallback: use pdfplumber (loads structure but we close immediately)
         with pdfplumber.open(pdf_path) as pdf:
             return len(pdf.pages)
     except Exception as e:

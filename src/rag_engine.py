@@ -7,9 +7,8 @@ from google.adk.agents import Agent
 from google.adk.models.google_llm import Gemini
 from google.adk.tools import FunctionTool
 from .database import add_to_database, search_database, set_session_vector_store
-from src.pdf_parser import parser_agent, parse_pdf_file
+from src.pdf_parser import parser_agent, parse_pdf_file, parallel_parse_pdf
 from .database import add_to_database, search_database, set_session_vector_store
-from src.pdf_parser import parser_agent, parse_pdf_file
 import requests
 import time
 import google.generativeai as genai
@@ -191,7 +190,7 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
     Returns:
         A message indicating success or failure.
     """
-    from src.pdf_parser import yield_pdf_pages
+    from src.pdf_parser import get_pdf_page_count
     
     local_path = file_path
     temp_file = None
@@ -237,88 +236,62 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
             total_chunks_processed = ingest_pages_tool(pages, source=file_path, tags=tags, document_id=document_id)
 
         else:
-            # Get total pages for progress bar
-            from src.pdf_parser import get_pdf_page_count
+            # Phase 1: Parse PDF in parallel (multi-process)
             from concurrent.futures import ThreadPoolExecutor
-            total_pages = get_pdf_page_count(local_path)
-            print(f"Parsing and ingesting PDF in batches: {local_path} (Total pages estimate: {total_pages})")
-
             import gc
-            page_generator = yield_pdf_pages(local_path)
-            current_batch = []
-            pages_for_tagging = []
-            tag_task = None  # async task for non-blocking tagging
 
-            batch_num = 0
-            pages_processed_count = 0
+            print(f"Parsing PDF (parallel): {local_path}")
+            if progress_callback:
+                progress_callback(5, "Parsing PDF pages (parallel)...")
+
+            # parallel_parse_pdf splits pages across CPU cores
+            all_pages = await asyncio.to_thread(parallel_parse_pdf, local_path)
+            total_pages = len(all_pages)
+            print(f"Parsed {total_pages} pages")
+
+            if progress_callback:
+                progress_callback(30, f"Parsed {total_pages} pages. Generating tags...")
+
+            # Phase 2: Generate tags (using first 5 pages)
+            pages_for_tagging = all_pages[:5]
+            print(f"Generating tags for: {file_path}")
+            tags = await tag_document_tool(file_path, pages=pages_for_tagging)
+            print(f"Generated tags: {tags}")
+
+            if progress_callback:
+                progress_callback(40, f"Tags generated. Embedding & storing...")
+
+            # Phase 3: Embed & store in batches (pipeline with ThreadPoolExecutor)
             loop = asyncio.get_event_loop()
             executor = ThreadPoolExecutor(max_workers=1)
-            pending_future = None  # pipeline: previous batch's embed/store future
+            pending_future = None
+            batch_num = 0
 
-            for page in page_generator:
-                current_batch.append(page)
-                pages_processed_count += 1
+            for i in range(0, total_pages, BATCH_SIZE):
+                batch = all_pages[i:i + BATCH_SIZE]
+                batch_num += 1
 
-                # Progress: update on every page (0-100%)
-                if total_pages > 0:
-                    percent = int(pages_processed_count / total_pages * 100)
-                    status_msg = f"Processing: {pages_processed_count}/{total_pages} pages ({percent}%)"
-                    print(status_msg)
-                    if progress_callback:
-                        progress_callback(percent, status_msg)
+                # Wait for previous batch
+                if pending_future is not None:
+                    total_chunks_processed += await pending_future
+                    gc.collect()
 
-                # Collect first few pages for tagging
-                if len(pages_for_tagging) < 5:
-                    pages_for_tagging.append(page)
+                # Progress update
+                percent = int(40 + (i / total_pages) * 55)  # 40-95%
+                status_msg = f"Embedding batch {batch_num}: {i}/{total_pages} pages ({percent}%)"
+                print(status_msg)
+                if progress_callback:
+                    progress_callback(percent, status_msg)
 
-                # Kick off tagging in background (non-blocking)
-                if len(pages_for_tagging) == 5 and tag_task is None:
-                    print(f"Generating tags (background) for: {file_path}")
-                    tag_task = asyncio.create_task(tag_document_tool(file_path, pages=pages_for_tagging))
+                # Submit batch to thread pool
+                pending_future = loop.run_in_executor(
+                    executor, ingest_pages_tool, batch, file_path, tags, document_id
+                )
 
-                # Process batch
-                if len(current_batch) >= BATCH_SIZE:
-                    batch_num += 1
-
-                    # Wait for previous batch to finish (pipeline)
-                    if pending_future is not None:
-                        total_chunks_processed += await pending_future
-                        gc.collect()
-
-                    # Ensure tags are ready before first write
-                    if not tags:
-                        if tag_task is not None:
-                            tags = await tag_task
-                        else:
-                            tags = await tag_document_tool(file_path, pages=pages_for_tagging)
-                        print(f"Generated tags: {tags}")
-
-                    # Submit this batch to thread pool (embed + store in background)
-                    batch_to_process = current_batch
-                    print(f"Ingesting batch {batch_num} ({len(batch_to_process)} pages)...")
-                    pending_future = loop.run_in_executor(
-                        executor, ingest_pages_tool, batch_to_process, file_path, tags, document_id
-                    )
-
-                    current_batch = []
-
-            # Wait for the last pipeline batch
+            # Wait for last batch
             if pending_future is not None:
                 total_chunks_processed += await pending_future
                 gc.collect()
-
-            # Process remaining pages
-            if current_batch:
-                batch_num += 1
-                if not tags:
-                    if tag_task is not None:
-                        tags = await tag_task
-                    else:
-                        tags = await tag_document_tool(file_path, pages=pages_for_tagging)
-                    print(f"Generated tags: {tags}")
-
-                print(f"Ingesting final batch {batch_num} ({len(current_batch)} pages)...")
-                total_chunks_processed += ingest_pages_tool(current_batch, source=file_path, tags=tags, document_id=document_id)
 
             executor.shutdown(wait=True)
         
