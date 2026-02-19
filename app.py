@@ -132,16 +132,28 @@ with st.sidebar:
 
                         # Check for duplicate via GCS (survives pod restarts)
                         if gcs.file_exists(destination_blob_name):
-                            # Try to show tags from local DB if available
-                            existing_doc = None
-                            if st.session_state.session_vector_store:
-                                existing_doc = st.session_state.session_vector_store.get_document_metadata(content_hash)
-                            tags = existing_doc.get('tags', '') if existing_doc else ''
-                            msg = f"⚠️ 此檔案已上傳過：**{uploaded_file.name}**"
-                            if tags:
-                                msg += f"\n\n🏷️ Tags: {tags}"
-                            st.warning(msg)
-                            st.stop()
+                            # Check Qdrant directly (survives pod restarts)
+                            qdrant_info = st.session_state.session_vector_store.has_document_in_qdrant(content_hash)
+                            
+                            if qdrant_info['exists']:
+                                # Already uploaded AND embedded → restore metadata & skip
+                                tags = qdrant_info.get('tags', '')
+                                chunk_count = qdrant_info['chunk_count']
+                                # Restore to local SQLite so sidebar shows the doc
+                                st.session_state.session_vector_store.save_document_metadata(
+                                    document_id=content_hash,
+                                    document_name=uploaded_file.name,
+                                    file_path=destination_blob_name,
+                                    tags=tags,
+                                    chunk_count=chunk_count
+                                )
+                                msg = f"⏭️ 此檔案已處理過：**{uploaded_file.name}**（{chunk_count} chunks）"
+                                if tags:
+                                    msg += f"\n\n🏷️ Tags: {tags}"
+                                st.success(msg)
+                                load_documents()
+                                st.stop()
+                            # else: uploaded to GCS but not embedded → fall through to re-process
                         st.info("📤 Uploading to Cloud Storage...")
                         gcs_uri = gcs.upload_from_file_object(
                             file_obj=uploaded_file,

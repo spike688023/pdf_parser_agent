@@ -440,6 +440,91 @@ class VectorStore:
                   datetime.now().isoformat(), chunk_count))
             self.conn.commit()
     
+    def has_document_in_qdrant(self, document_id: str) -> dict:
+        """
+        Check if a document has been FULLY embedded in Qdrant.
+        Looks for a completion marker point (inserted after all chunks are done).
+        Returns {'exists': bool, 'chunk_count': int, 'tags': str}
+        """
+        if not self.use_qdrant or not self.qdrant_client:
+            return {'exists': False, 'chunk_count': 0, 'tags': ''}
+        
+        try:
+            from qdrant_client.http import models
+            
+            # Check for completion marker
+            marker_filter = models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="document_id",
+                        match=models.MatchValue(value=document_id)
+                    ),
+                    models.FieldCondition(
+                        key="__completion_marker__",
+                        match=models.MatchValue(value=True)
+                    )
+                ]
+            )
+            
+            marker_result = self.qdrant_client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=marker_filter,
+                limit=1,
+                with_payload=True
+            )
+            
+            if not marker_result[0]:
+                return {'exists': False, 'chunk_count': 0, 'tags': ''}
+            
+            # Marker found → document is fully embedded
+            marker_payload = marker_result[0][0].payload
+            return {
+                'exists': True,
+                'chunk_count': marker_payload.get('chunk_count', 0),
+                'tags': marker_payload.get('tags', ''),
+                'document_name': marker_payload.get('document_name', '')
+            }
+        except Exception as e:
+            print(f"⚠️ Error checking Qdrant for document {document_id}: {e}")
+            return {'exists': False, 'chunk_count': 0, 'tags': ''}
+
+    def mark_document_complete(self, document_id: str, document_name: str,
+                               tags: str = '', chunk_count: int = 0):
+        """
+        Insert a completion marker point into Qdrant.
+        Called AFTER all chunks are successfully upserted.
+        """
+        if not self.use_qdrant or not self.qdrant_client:
+            return
+        
+        try:
+            from qdrant_client.http import models
+            import uuid
+            
+            # Deterministic ID so re-marking is idempotent
+            marker_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{document_id}__completion__"))
+            
+            # Zero vector (won't be used for search)
+            zero_vector = [0.0] * self.dimension
+            
+            self.qdrant_client.upsert(
+                collection_name=self.collection_name,
+                points=[models.PointStruct(
+                    id=marker_id,
+                    vector={"dense": zero_vector},
+                    payload={
+                        "document_id": document_id,
+                        "document_name": document_name,
+                        "tags": tags,
+                        "chunk_count": chunk_count,
+                        "__completion_marker__": True
+                    }
+                )]
+            )
+            print(f"✅ Completion marker set for {document_name} ({chunk_count} chunks)")
+        except Exception as e:
+            print(f"⚠️ Failed to set completion marker: {e}")
+
     def get_document_metadata(self, document_id: str) -> Dict[str, Any]:
         """Retrieve document metadata"""
         if self.use_firestore and self.firestore_db:

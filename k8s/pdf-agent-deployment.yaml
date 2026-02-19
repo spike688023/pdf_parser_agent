@@ -46,7 +46,7 @@ spec:
         resources:
           requests:
             cpu: "500m"
-            memory: "2Gi"
+            memory: "2500Mi"  # 從 2Gi 提高，避免 baseline 就接近 HPA 門檻
           limits:
             cpu: "1000m"
             memory: "4Gi"

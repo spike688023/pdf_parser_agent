@@ -213,6 +213,26 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
         document_id = content_hash if content_hash else hashlib.md5(file_path.encode()).hexdigest()[:16]
         document_name = original_filename if original_filename else os.path.basename(file_path)
         
+        # === Dedup check: query Qdrant directly (survives pod restarts) ===
+        vector_store = get_session_vector_store()
+        if vector_store:
+            qdrant_info = vector_store.has_document_in_qdrant(document_id)
+            if qdrant_info['exists']:
+                chunk_count = qdrant_info['chunk_count']
+                tags = qdrant_info.get('tags', '')
+                print(f"⏭️ Skipping ingestion: {document_name} already has {chunk_count} chunks in Qdrant")
+                if progress_callback:
+                    progress_callback(100, f"Already processed: {document_name}")
+                # Restore metadata to local SQLite (so list_documents works)
+                vector_store.save_document_metadata(
+                    document_id=document_id,
+                    document_name=document_name,
+                    file_path=file_path,
+                    tags=tags,
+                    chunk_count=chunk_count
+                )
+                return f"⏭️ 此檔案已處理過：{document_name}（{chunk_count} chunks）。Tags: {tags}"
+        
         tags = ""
         total_chunks_processed = 0
         BATCH_SIZE = 10  # Smaller batches to limit peak memory; gc.collect() runs between batches
@@ -302,6 +322,13 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
                 document_id=document_id,
                 document_name=document_name,
                 file_path=file_path,
+                tags=tags,
+                chunk_count=total_chunks_processed
+            )
+            # Set completion marker in Qdrant (dedup relies on this)
+            vector_store.mark_document_complete(
+                document_id=document_id,
+                document_name=document_name,
                 tags=tags,
                 chunk_count=total_chunks_processed
             )

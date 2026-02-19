@@ -8,7 +8,7 @@ spec:
     kind: Deployment
     name: pdf-agent
   minReplicas: 1
-  maxReplicas: 2
+  maxReplicas: 1
   metrics:
   - type: Resource
     resource:
@@ -21,7 +21,7 @@ spec:
       name: memory
       target:
         type: Utilization
-        averageUtilization: 70  # 當記憶體使用率超過 70% 時擴展
+        averageUtilization: 85  # 從 70% 提高到 85%，避免 baseline 就觸發 scale up
   behavior:
     scaleUp:
       stabilizationWindowSeconds: 30  # 30 秒後才擴展 (避免抖動)
