@@ -19,7 +19,7 @@ def create_qa_agent() -> Agent:
     
     return Agent(
         name="QAAgent",
-        model=Gemini(model="gemini-2.5-flash-lite", retry_options=retry_config),
+        model=Gemini(model="gemini-2.5-flash", retry_options=retry_config),
         instruction="""You are a helpful AI assistant.
 
         The user has asked a question.

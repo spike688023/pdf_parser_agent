@@ -19,6 +19,10 @@ echo "🛑 Stopping AI Services (Scale Down to 0)..."
 # 將所有 Deployment 的副本數設為 0
 # 這樣 Pod 會被刪除，GKE Autopilot 會自動釋放背後的 Node (停止計費)
 
+# 0. 先刪除 HPA，否則 HPA 會自動把服務叫醒 (minReplicas=1)
+echo "🔪 Deleting HPAs to prevent auto-scaling..."
+$KUBECTL_CMD delete hpa embedding-nim-hpa pdf-agent-hpa reranking-nim-hpa --ignore-not-found=true
+
 echo "⬇️ Scaling down Embedding NIM..."
 $KUBECTL_CMD scale deployment embedding-nim --replicas=0
 

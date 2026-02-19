@@ -21,9 +21,14 @@ spec:
             - -c
             - |
               echo "🛑 Auto-shutdown triggered at $(date)"
+              
+              # 1. 先刪除 HPA (HorizontalPodAutoscaler)，否則 HPA 會自動把服務叫醒 (minReplicas=1)
+              echo "🔪 Deleting HPAs to prevent auto-scaling..."
+              kubectl delete hpa embedding-nim-hpa pdf-agent-hpa reranking-nim-hpa --ignore-not-found=true
+              
               echo "Scaling down all AI services to 0..."
               
-              # 停止 AI 服務
+              # 2. 停止 AI 服務 Deployment
               kubectl scale deployment embedding-nim --replicas=0 || true
               # Reranking now uses Gemini API (no deployment to scale down)
               kubectl scale deployment qdrant --replicas=0 || true
@@ -31,7 +36,7 @@ spec:
               
               echo "✅ AI services scaled down to 0"
               
-              # 停止監控服務
+              # 3. 停止監控服務 (Monitoring Namespace)
               echo "📉 Scaling down monitoring services..."
               kubectl scale deployment monitoring-grafana --replicas=0 -n monitoring || true
               kubectl scale statefulset prometheus-monitoring-kube-prometheus-prometheus --replicas=0 -n monitoring || true
@@ -62,6 +67,9 @@ rules:
 - apiGroups: ["apps"]
   resources: ["deployments", "deployments/scale", "statefulsets", "statefulsets/scale"]
   verbs: ["get", "list", "patch", "update"]
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "delete"]
 ---
 # ClusterRoleBinding: 把 ClusterRole 綁定到 ServiceAccount
 apiVersion: rbac.authorization.k8s.io/v1

@@ -34,6 +34,7 @@ $KUBECTL_CMD scale deployment pdf-agent --replicas=1 || true
 # 用 -f k8s/ 遞迴部署所有 YAML
 echo "🛠️ Applying latest configurations (Just in case)..."
 $KUBECTL_CMD apply -f k8s/ -R
+$KUBECTL_CMD apply -f k8s/hpa.yaml  # 確保 HPA 被重新建立 (因為 Stop 時被刪除了)
 
 echo "✅ All services startup requested!"
 echo "⏳ It may take 2-5 minutes for GPU nodes to be provisioned by GKE Autopilot."

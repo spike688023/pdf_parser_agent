@@ -247,7 +247,8 @@ if prompt := st.chat_input("Ask a question about your documents"):
             retrieved_context = []
 
             start_time = time.time() # Start timing manually for async generator
-            
+            has_yielded_text = False
+
             try:
                 async for event in runner.run_async(
                     session_id=st.session_state.session_id,
@@ -285,13 +286,39 @@ if prompt := st.chat_input("Ask a question about your documents"):
                             if hasattr(content, 'parts') and content.parts:
                                 for part in content.parts:
                                     if hasattr(part, 'text') and part.text:
+                                        has_yielded_text = True
                                         yield part.text
                     # Fallback for older ADK versions or different event types
                     elif hasattr(event, 'type') and event.type == "model_response":
                         if hasattr(event, 'text') and event.text:
+                            has_yielded_text = True
                             yield event.text
                         elif hasattr(event, 'part') and hasattr(event.part, 'text'):
+                            has_yielded_text = True
                             yield event.part.text
+
+                # Fallback: if model returned empty content but we have retrieved context
+                if not has_yielded_text and retrieved_context:
+                    logging.warning("LLM returned empty response. Using fallback direct model call.")
+                    try:
+                        import google.generativeai as genai
+                        fallback_model = genai.GenerativeModel('gemini-2.5-flash')
+                        context_text = "\n\n".join(retrieved_context)
+                        fallback_prompt = f"""Based on the following context, answer the user's question.
+
+Context:
+{context_text}
+
+Question: {prompt}
+
+Please provide a comprehensive answer in the same language as the question. If the context doesn't contain enough information, say so."""
+                        fallback_response = fallback_model.generate_content(fallback_prompt)
+                        if fallback_response and fallback_response.text:
+                            has_yielded_text = True
+                            yield fallback_response.text
+                    except Exception as fallback_err:
+                        logging.error(f"Fallback model call failed: {fallback_err}")
+                        yield "抱歉，模型暫時無法生成回答，請稍後再試。"
             finally:
                 # Record latency metric
                 duration = time.time() - start_time
