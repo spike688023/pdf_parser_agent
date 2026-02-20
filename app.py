@@ -90,9 +90,8 @@ if "cleanup_thread_started" not in st.session_state:
 def load_documents():
     st.session_state.documents = st.session_state.session_vector_store.list_all_documents()
 
-# Initial load
-if not st.session_state.documents:
-    load_documents()
+# Load documents every rerun to keep sidebar fresh
+load_documents()
 
 # Sidebar for document management
 with st.sidebar:
@@ -118,50 +117,53 @@ with st.sidebar:
                     # Update session activity
                     update_session_activity(st.session_state.session_id)
 
-                    # Compute content hash for dedup
+                    # ====== Step 1: 本機算 SHA ======
                     file_bytes = uploaded_file.getvalue()
                     content_hash = _hashlib.sha256(file_bytes).hexdigest()[:16]
-                    uploaded_file.seek(0)  # Reset for later upload
+                    uploaded_file.seek(0)
 
-                    # Upload to GCS (using content_hash as folder for dedup)
                     try:
                         from src.gcs_storage import get_gcs_storage
                         gcs = get_gcs_storage()
-
                         destination_blob_name = f"uploads/{content_hash}/{uploaded_file.name}"
 
-                        # Check for duplicate via GCS (survives pod restarts)
-                        if gcs.file_exists(destination_blob_name):
-                            # Check Qdrant directly (survives pod restarts)
-                            qdrant_info = st.session_state.session_vector_store.has_document_in_qdrant(content_hash)
-                            
-                            if qdrant_info['exists']:
-                                # Already uploaded AND embedded → restore metadata & skip
-                                tags = qdrant_info.get('tags', '')
-                                chunk_count = qdrant_info['chunk_count']
-                                # Restore to local SQLite so sidebar shows the doc
-                                st.session_state.session_vector_store.save_document_metadata(
-                                    document_id=content_hash,
-                                    document_name=uploaded_file.name,
-                                    file_path=destination_blob_name,
-                                    tags=tags,
-                                    chunk_count=chunk_count
-                                )
-                                msg = f"⏭️ 此檔案已處理過：**{uploaded_file.name}**（{chunk_count} chunks）"
-                                if tags:
-                                    msg += f"\n\n🏷️ Tags: {tags}"
-                                st.success(msg)
-                                load_documents()
-                                st.stop()
-                            # else: uploaded to GCS but not embedded → fall through to re-process
-                        st.info("📤 Uploading to Cloud Storage...")
-                        gcs_uri = gcs.upload_from_file_object(
-                            file_obj=uploaded_file,
-                            destination_blob_name=destination_blob_name
-                        )
+                        # ====== Step 2: GCS 查重 → 決定要不要上傳 ======
+                        gcs_exists = gcs.file_exists(destination_blob_name)
 
-                        # Download to temp location for parsing
-                        st.info("📄 Parsing PDF...")
+                        if not gcs_exists:
+                            # 新檔案 → 上傳到 GCS
+                            st.info("📤 Uploading to Cloud Storage...")
+                            gcs.upload_from_file_object(
+                                file_obj=uploaded_file,
+                                destination_blob_name=destination_blob_name
+                            )
+
+                        # ====== Step 3: Qdrant 查重 → 決定要不要 embed ======
+                        qdrant_info = st.session_state.session_vector_store.has_document_in_qdrant(content_hash)
+
+                        if qdrant_info['exists']:
+                            # 已上傳 + 已 embed → 恢復 metadata 就好，跳過
+                            tags = qdrant_info.get('tags', '')
+                            chunk_count = qdrant_info['chunk_count']
+                            st.session_state.session_vector_store.save_document_metadata(
+                                document_id=content_hash,
+                                document_name=uploaded_file.name,
+                                file_path=destination_blob_name,
+                                tags=tags,
+                                chunk_count=chunk_count
+                            )
+                            msg = f"⏭️ 此檔案已處理過：**{uploaded_file.name}**（{chunk_count} chunks）"
+                            if tags:
+                                msg += f"\n\n🏷️ Tags: {tags}"
+                            st.success(msg)
+                            load_documents()
+                            st.stop()
+
+                        # ====== Step 4: 需要 embed → 下載到本機開始處理 ======
+                        if gcs_exists:
+                            st.info("📄 GCS 已有檔案，重新 embedding...")
+                        else:
+                            st.info("📄 Parsing PDF...")
                         temp_path = gcs.download_to_temp(destination_blob_name)
 
                         # Progress bar for the main processing loop
