@@ -1,310 +1,356 @@
-# 📄 PDF 問答智能助理
+# 📄 PDF Q&A Agent — Cloud Edition
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://spike688023-pdf-parser-agent-app-aapdms.streamlit.app/)
+> 部署於 GKE Autopilot 上的 PDF 問答智能助理，結合 NVIDIA NIM Embedding、Qdrant 向量資料庫、Google Gemini AI 與 ADK，實現企業級的文件語義搜尋與對話式問答。
 
-一個注重隱私、支援多使用者的 PDF 問答系統，由 Google Gemini AI 和 ADK 驅動，具備智能文件管理、語義搜尋、自動標籤生成及 Session 隔離功能。
+## 🏗️ 系統架構
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     GKE Autopilot Cluster                       │
+│                     (us-east1 region)                            │
+│                                                                 │
+│  ┌──────────────┐   ┌──────────────────┐   ┌────────────────┐  │
+│  │  PDF Agent   │   │  NVIDIA NIM      │   │   Qdrant       │  │
+│  │  (Streamlit) │──▶│  Embedding       │   │   Vector DB    │  │
+│  │  Port: 8080  │   │  llama-3.2-nv-   │   │   Port: 6333   │  │
+│  │              │──▶│  embedqa-1b-v2   │   │                │  │
+│  │              │   │  Port: 8000      │   │                │  │
+│  │              │──▶│  GPU: NVIDIA L4  │   │                │  │
+│  └──────┬───────┘   └──────────────────┘   └────────────────┘  │
+│         │                                                       │
+│         ▼                                                       │
+│  ┌──────────────┐   ┌──────────────────┐                       │
+│  │  Google      │   │  Google Cloud    │                       │
+│  │  Gemini API  │   │  Storage (GCS)   │                       │
+│  │  (LLM 推理)  │   │  (PDF 持久儲存)  │                       │
+│  └──────────────┘   └──────────────────┘                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 元件說明
+
+| 元件 | 說明 | 資源 |
+|------|------|------|
+| **PDF Agent** | Streamlit 前端 + RAG 邏輯 | CPU 500m–1000m, 2.5–4Gi |
+| **NVIDIA NIM Embedding** | `llama-3.2-nv-embedqa-1b-v2` 模型 | NVIDIA L4 GPU × 1 |
+| **Qdrant** | 向量資料庫，儲存 embedding & completion marker | CPU 500m, 512Mi |
+| **GCS** | Google Cloud Storage，持久儲存原始 PDF | — |
+| **Gemini API** | `gemini-2.5-flash-lite`，問答推理 & 文件標籤生成 | — |
+
+---
 
 ## ✨ 核心功能
 
-1. **多文件管理**：上傳並管理多個 PDF，以分頁方式顯示文件元數據
-2. **自動標籤**：自動為每份文件生成語義標籤
-3. **自動重點提取**：使用 Map-Reduce 策略主動提取並顯示大型文件的關鍵重點
-4. **混合檢索策略**：結合語義搜尋與文件重點，提供更快速、更準確的回應
-5. **Session 隔離**：完整的使用者資料隔離，自動清理機制（6 小時過期）
-6. **完整日誌記錄**：檔案式日誌（`logs/app.log`）和 ADK LoggingPlugin 用於除錯
-7. **優化的使用者體驗**：聊天輸入框置頂，無需滾動即可提問
+### 📄 文件管理
+- **多文件上傳**：在 Sidebar 上傳多份 PDF，即時處理
+- **自動標籤生成**：Gemini 分析前 5 頁，自動產生語義標籤
+- **Session 隔離**：每個瀏覽器 session 擁有獨立的文件空間
+- **自動清理**：6 小時無活動的 session 自動清除
+
+### 🔍 RAG 語義搜尋
+- **NVIDIA NIM Embedding**：使用 GPU 加速的 `llama-3.2-nv-embedqa-1b-v2` 模型
+- **Qdrant 向量搜尋**：高效的 ANN 近似最近鄰搜尋
+- **多文件跨文件檢索**：可同時搜尋所有已上傳文件的內容
+
+### 🛡️ 三層 PDF 去重機制
+
+```
+上傳 PDF
+  │
+  ▼
+Step 1: 本機算 SHA-256 hash
+  │
+  ▼
+Step 2: GCS 查重 ──── 不存在 → 上傳到 GCS
+  │                    存在 → 跳過上傳
+  ▼
+Step 3: Qdrant Completion Marker 查重
+  │
+  ├─ Marker 存在 → ⏭️ 秒回跳過（恢復 metadata 到 SQLite）
+  │
+  └─ Marker 不存在 → 下載 PDF，開始 parallel parsing + embedding
+                       完成後寫入 Completion Marker
+```
+
+**為什麼需要 Completion Marker？**
+- Pod 重啟後 SQLite 資料遺失（`emptyDir` volume）
+- GCS 有檔案 ≠ embedding 完成（可能在 embedding 途中 crash）
+- Qdrant 的 completion marker 是唯一持久且可靠的「已完成」標記
+
+### ⚡ 平行處理管線
+
+```
+PDF Pages ──┬── Worker 1 ──┐
+            ├── Worker 2 ──┤  Parallel Parse
+            ├── Worker 3 ──┤  (ProcessPoolExecutor)
+            └── Worker N ──┘
+                    │
+                    ▼
+              Tag Generation
+              (Gemini, 前 5 頁)
+                    │
+                    ▼
+         ┌── Batch 1 Embed ──▶ Qdrant Upsert ──┐
+         ├── Batch 2 Embed ──▶ Qdrant Upsert ──┤  Pipeline
+         └── Batch N Embed ──▶ Qdrant Upsert ──┘  (ThreadPool)
+                    │
+                    ▼
+            Completion Marker ✅
+```
+
+- **Parsing** 使用 `ProcessPoolExecutor`，多 CPU core 同時解析 PDF 頁面
+- **Embedding + Upsert** 使用 pipeline，前一批在存 Qdrant 時同時 embed 下一批
+- **即時進度更新**：前端顯示解析 5%→28%、embedding 40%→95% 的進度條
+
+---
 
 ## 🛠️ 技術架構
 
-1. **前端**：Streamlit 打造響應式互動式網頁介面
-2. **大型語言模型**：Google Gemini API（`gemini-2.5-flash-lite`）提供高品質推理和文字生成
-3. **Agent 框架**：Google ADK（Agent Development Kit）用於 Agent 編排、工具管理和 Session 處理
-4. **向量資料庫**：FAISS（Facebook AI Similarity Search）實現高效本地語義搜尋
-5. **嵌入模型**：Sentence-Transformers（`all-MiniLM-L6-v2`）創建本地向量嵌入
-6. **PDF 處理**：`pypdf` 和 `pdfplumber` 進行強健的文字提取
-7. **資料庫**：SQLite 用於元數據儲存、Session 追蹤和活動監控
-8. **可觀測性**：整合 LoggingPlugin 進行全面的 Agent 活動追蹤和除錯
+| 層級 | 技術 | 說明 |
+|------|------|------|
+| **前端** | Streamlit | 響應式互動網頁介面 |
+| **LLM** | Google Gemini API (`gemini-2.5-flash-lite`) | 問答推理、Tag 生成 |
+| **Agent 框架** | Google ADK (Agent Development Kit) | Agent 編排、工具管理 |
+| **Embedding** | NVIDIA NIM `llama-3.2-nv-embedqa-1b-v2` | GPU 加速向量化，dim=2048 |
+| **向量資料庫** | Qdrant | ANN 搜尋、completion marker |
+| **PDF 解析** | `pdfplumber` + `pypdf` | Multi-process 平行解析 |
+| **物件儲存** | Google Cloud Storage (GCS) | PDF 原檔持久儲存 |
+| **本地 DB** | SQLite | Session metadata（ephemeral） |
+| **監控** | Prometheus + Grafana | 應用指標、GPU 使用率 |
+| **容器** | Docker + GKE Autopilot | 自動擴縮容、GPU 排程 |
+| **CI/CD** | Cloud Build + Artifact Registry | 雲端建置、映像管理 |
 
-## 📋 系統需求
-
-- Python 3.8 或更高版本
-- Google API Key（Gemini API）
-- 至少 2GB 可用記憶體
-
-## 🚀 快速開始
-
-### 1. 複製專案
-
-```bash
-git clone git@github.com:spike688023/pdf_parser_agent.git
-cd pdf_parser_agent
-```
-
-### 2. 建立虛擬環境
-
-建議使用虛擬環境來隔離專案依賴：
-
-```bash
-# 建立虛擬環境
-python3 -m venv .venv
-
-# 啟動虛擬環境
-# macOS/Linux:
-source .venv/bin/activate
-
-# Windows:
-# .venv\Scripts\activate
-```
-
-### 3. 安裝依賴套件
-
-```bash
-pip install -r requirements.txt
-```
-
-**requirements.txt 包含以下套件：**
-- `google-generativeai` - Google Gemini API
-- `google-genai` - Google Generative AI SDK
-- `google-adk` - Google Agent Development Kit
-- `pypdf` - PDF 解析
-- `pdfplumber` - 進階 PDF 處理
-- `faiss-cpu` - 向量搜尋引擎
-- `numpy` - 數值運算
-- `python-dotenv` - 環境變數管理
-- `streamlit` - 網頁介面框架
-- `sentence-transformers` - 文字嵌入模型
-- `aiohttp` - 非同步 HTTP 客戶端
-
-### 4. 設定 Google API Key
-
-#### 4.1 取得 API Key
-
-1. 前往 [Google AI Studio](https://makersuite.google.com/app/apikey)
-2. 使用 Google 帳號登入
-3. 點擊「Create API Key」生成新的 API Key
-4. 複製生成的 API Key
-
-#### 4.2 設定環境變數
-
-複製範例環境檔案：
-
-```bash
-cp .env.example .env
-```
-
-編輯 `.env` 檔案並加入您的 API Key：
-
-```bash
-GOOGLE_API_KEY=your_actual_google_api_key_here
-```
-
-**重要提醒：**
-- 不要將 `.env` 檔案提交到版本控制
-- `.env` 已包含在 `.gitignore` 中
-- 請妥善保管您的 API Key
-
-### 5. 建立必要目錄
-
-系統會自動建立 `storage` 和 `uploads` 目錄，但您也可以手動建立：
-
-```bash
-mkdir -p storage uploads logs
-```
-
-## 💻 使用方式
-
-### 方法 1：Streamlit 網頁介面（推薦）
-
-啟動 Streamlit 應用程式：
-
-```bash
-streamlit run app.py
-```
-
-應用程式會自動在瀏覽器中開啟（預設：`http://localhost:8501`）
-
-**使用步驟：**
-1. 在左側邊欄上傳一個或多個 PDF 檔案
-2. 點擊「Process PDF」處理每份文件（自動生成標籤）
-3. 在不同分頁中查看文件元數據、標籤和重點
-4. 可選：對沒有重點的文件點擊「Generate Highlights」
-5. 在頂部的聊天框中輸入問題開始對話
-6. 可跨所有上傳的文件提問 - Agent 會自動檢索相關內容
-
-**多使用者支援：**
-- 每個瀏覽器 Session 擁有獨立的儲存空間
-- 使用者無法看到彼此的文件
-- Session 在 6 小時無活動後自動過期
-
-### 方法 2：命令列介面
-
-#### 處理 PDF 文件
-
-```bash
-python main.py ingest "path/to/your/document.pdf"
-```
-
-#### 提問
-
-```bash
-# 使用預設 session
-python main.py ask "文件的主要主題是什麼？"
-
-# 使用特定 session ID（用於管理不同對話）
-python main.py ask "總結關鍵要點" --session my-session-id
-```
+---
 
 ## 📁 專案結構
 
 ```
 pdf_parser_agent/
-├── app.py                     # Streamlit 網頁應用程式
-├── main.py                    # 命令列介面
-├── requirements.txt           # Python 依賴套件
-├── .env.example              # 環境變數範例
-├── .env                      # 環境變數（需自行建立）
-├── .gitignore                # Git 忽略規則
-├── src/                      # 核心原始碼
-│   ├── agent.py             # Q&A Agent 實作
-│   ├── pdf_parser.py        # PDF 解析器
-│   ├── rag_engine.py        # RAG 引擎和工具
-│   ├── database.py          # 向量儲存和元數據管理
-│   ├── session_cleanup.py   # Session 清理服務
-│   └── memory.py            # 記憶體服務
-├── uploads/                  # 使用者上傳的 PDF（Session 專屬）
-│   └── {session_id}/        # 每個 Session 隔離
-├── storage/                  # 資料儲存目錄
-│   ├── {session_id}_metadata.db    # Session 專屬元數據
-│   ├── {session_id}_faiss.index    # Session 專屬向量索引
-│   ├── sessions.db          # ADK Session 資料庫
-│   └── session_activity.db  # Session 活動追蹤
-├── logs/                     # 應用程式日誌
-│   └── app.log              # 主要應用程式日誌
-└── tests/                   # 測試檔案
+├── app.py                          # Streamlit 主應用（上傳、去重、對話）
+├── main.py                         # CLI 介面
+├── Dockerfile                      # 容器化定義
+├── requirements.txt                # Python 依賴
+├── build-and-push.sh               # 一鍵建置 & 推送到 Artifact Registry
+├── start-AI.sh                     # 啟動所有 AI 服務（Scale Up）
+├── stop-AI.sh                      # 停止所有服務（Scale to 0 省錢）
+├── .env.example                    # 環境變數範例
+│
+├── src/                            # 核心邏輯
+│   ├── agent.py                    #   ADK Agent 定義 & Tool binding
+│   ├── rag_engine.py               #   RAG 引擎：PDF ingest + 語義搜尋
+│   ├── pdf_parser.py               #   PDF 解析：parallel parsing
+│   ├── database.py                 #   VectorStore：Qdrant/SQLite 操作
+│   ├── gcs_storage.py              #   GCS 上傳/下載/查重
+│   ├── memory.py                   #   對話記憶管理
+│   ├── metrics.py                  #   Prometheus 指標定義
+│   ├── session_cleanup.py          #   Session 自動清理
+│   └── firestore_db.py             #   Firestore 介面（可選）
+│
+├── k8s/                            # Kubernetes 部署設定
+│   ├── pdf-agent-deployment.yaml   #   PDF Agent Deployment + LoadBalancer
+│   ├── qdrant.yaml                 #   Qdrant Deployment + Service
+│   ├── nims/
+│   │   └── embedding-nim.yaml      #   NVIDIA NIM Embedding（GPU）
+│   ├── hpa.yaml                    #   HorizontalPodAutoscaler
+│   ├── auto-shutdown-cronjob.yaml  #   定時自動關機 CronJob
+│   ├── setup_secrets.sh            #   建立 K8s Secrets
+│   ├── grafana_dashboard.json      #   Grafana 儀表板設定
+│   └── install_monitoring.sh       #   安裝 Prometheus + Grafana
+│
+├── scripts/                        # 輔助腳本
+│   ├── check_container.py          #   容器健康檢查
+│   └── check_container.sh          #   容器健康檢查（Shell）
+│
+├── agents/                         # ADK Agent 定義
+│   ├── pdf_agent_app/              #   主 Agent 應用
+│   └── test_agent_app/             #   測試用 Agent
+│
+├── tests/                          # 測試檔案
+├── docs/                           # 文件
+└── misc/                           # 雜項工具
 ```
 
-## 🔧 進階設定
+---
 
-### 修改模型設定
+## 🚀 部署指南
 
-您可以在 `src/agent.py` 中調整使用的 Gemini 模型：
+### 前置需求
 
-```python
-model=Gemini(model="gemini-2.5-flash-lite")  # 快速模型
-# 或
-model=Gemini(model="gemini-1.5-pro")         # 更強大的模型
+- Google Cloud 帳號 & [gcloud CLI](https://cloud.google.com/sdk)
+- [kubectl](https://kubernetes.io/docs/tasks/tools/) 已安裝
+- [NVIDIA NGC](https://ngc.nvidia.com/) 帳號（取得 NIM image）
+- Google API Key（Gemini API）
+
+### 1. 建立 GKE Autopilot Cluster
+
+```bash
+gcloud container clusters create-auto pdf-agent-cluster \
+  --region=us-east1 \
+  --project=YOUR_PROJECT_ID
 ```
 
-### 調整向量搜尋參數
+### 2. 建立 Secrets
 
-您可以在 `src/rag_engine.py` 中修改搜尋相關性：
+```bash
+# Google API Key
+kubectl create secret generic google-api-key \
+  --from-literal=GOOGLE_API_KEY=YOUR_KEY
 
-```python
-# 修改 top_k 值來改變返回的相關文本數量
-results = search_database(query_embedding, k=5)
+# NVIDIA NGC API Key（拉取 NIM image 用）
+kubectl create secret generic ngc-api-key \
+  --from-literal=NGC_API_KEY=YOUR_NGC_KEY
+
+# NGC image pull secret
+kubectl create secret docker-registry ngc-secret \
+  --docker-server=nvcr.io \
+  --docker-username='$oauthtoken' \
+  --docker-password=YOUR_NGC_KEY
 ```
 
-### 調整 Session 過期時間
+### 3. 部署所有服務
 
-在 `src/session_cleanup.py` 中修改過期時間：
-
-```python
-cleanup = SessionCleanup(expiry_hours=6)  # 改為您想要的小時數
+```bash
+kubectl apply -f k8s/ -R
 ```
+
+### 4. 建置 & 推送 Docker Image
+
+```bash
+./build-and-push.sh
+```
+
+此腳本會：
+1. 使用 Cloud Build 在雲端建置 amd64 image
+2. 推送到 Artifact Registry
+3. 自動清理舊映像（保留最新 3 個）
+4. 觸發 `kubectl rollout restart` 更新 Pod
+
+### 5. 取得外部 IP
+
+```bash
+kubectl get svc pdf-agent-service
+# EXTERNAL-IP 即為可存取的位址
+```
+
+---
+
+## 🔧 運維腳本
+
+| 腳本 | 用途 |
+|------|------|
+| `./start-AI.sh` | 啟動所有 AI 服務（從 Scale 0 恢復） |
+| `./stop-AI.sh` | 停止所有服務（Scale to 0，節省 GPU 費用） |
+| `./build-and-push.sh` | Cloud Build 建置 + 推送 + 重啟 Pod |
+| `./start-monitoring.sh` | 啟動 Prometheus + Grafana 監控 |
+| `./stop-monitoring.sh` | 停止監控服務 |
+| `./connect-grafana.sh` | Port-forward Grafana 到本機 |
+| `./test-hpa.sh` | 壓力測試 HPA 自動擴縮 |
+
+### 自動關機 CronJob
+
+系統配置了定時自動關機（`auto-shutdown-cronjob.yaml`），在台灣時間 18:00、21:00、23:00 自動停止所有服務，避免忘關而產生費用。
+
+```bash
+# 暫停 CronJob
+kubectl patch cronjob auto-shutdown-ai-services -p '{"spec":{"suspend":true}}'
+
+# 恢復 CronJob
+kubectl patch cronjob auto-shutdown-ai-services -p '{"spec":{"suspend":false}}'
+```
+
+---
+
+## 💻 本機開發
+
+### 1. 環境設定
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+# 編輯 .env 填入 GOOGLE_API_KEY 等環境變數
+```
+
+### 2. 啟動 Streamlit（本機模式）
+
+```bash
+streamlit run app.py
+```
+
+> ⚠️ 本機模式需確保 `EMBEDDING_SERVICE_URL` 和 `QDRANT_URL` 指向可存取的服務端點。
+
+---
+
+## 📊 監控
+
+### Prometheus 指標
+
+| 指標名稱 | 說明 |
+|----------|------|
+| `pdf_processing_duration_seconds` | PDF 處理耗時 |
+| `pdf_query_duration_seconds` | 問答查詢耗時 |
+| `pdf_active_sessions` | 活躍 Session 數 |
+| `pdf_documents_total` | 已處理文件總數 |
+
+### Grafana Dashboard
+
+```bash
+./connect-grafana.sh
+# 開啟 http://localhost:3000
+# 匯入 k8s/grafana_dashboard.json
+```
+
+---
 
 ## 🐛 疑難排解
 
-### Q: 出現「GOOGLE_API_KEY not found」錯誤
+### PDF 上傳後 sidebar 顯示為空
 
-**A:** 請確認：
-1. `.env` 檔案已建立
-2. `.env` 檔案中正確包含 `GOOGLE_API_KEY=your_key`
-3. API Key 沒有多餘的空格或引號
+**原因**：Pod 重啟後 SQLite 資料遺失，但如果使用 Qdrant completion marker，重新上傳同一檔案會自動恢復 metadata。
 
-### Q: Streamlit 無法啟動
+### GPU Node 啟動緩慢
 
-**A:** 請檢查：
-1. 虛擬環境已啟動
-2. 所有依賴套件已安裝：`pip install -r requirements.txt`
-3. 8501 埠口未被佔用
+GKE Autopilot 的 GPU Node 冷啟動通常需要 2–5 分鐘，可用 `kubectl get pods -w` 監控。
 
-### Q: PDF 處理失敗
+### NIM 模型載入失敗
 
-**A:** 可能原因：
-1. PDF 檔案損壞或加密
-2. PDF 檔案過大（建議 < 50MB）
-3. 檔案路徑包含特殊字元
-
-### Q: aiohttp 相容性錯誤
-
-**A:** 程式碼包含 monkey patch 修復。如果問題持續，請嘗試：
-```bash
-pip install --upgrade aiohttp google-generativeai
-```
-
-### Q: Session 資料遺失
-
-**A:** 可能原因：
-1. 清除了瀏覽器 Cookie（會建立新 Session）
-2. Session 超過 6 小時未活動被自動清理
-3. 如需永久儲存，請考慮實作 Google OAuth 登入
-
-## 📝 重要說明
-
-1. **API 使用限制**：Google Gemini API 有使用配額（免費層級 RPM 15），請監控使用量
-2. **資料隱私**：
-   - PDF 檔案在本地解析和儲存
-   - 僅文字內容會傳送到 Google API 進行推理
-   - 每個使用者 Session 完全隔離
-3. **Session 管理**：
-   - Session 在 6 小時無活動後過期
-   - 清除瀏覽器 Cookie 會建立新 Session
-   - 如需永久儲存，請考慮實作 Google OAuth 登入
-4. **儲存空間**：
-   - 向量索引和 PDF 會佔用磁碟空間
-   - 自動清理會移除不活躍的 Session
-   - 請監控 `uploads/` 和 `storage/` 目錄
-5. **多使用者部署**：
-   - 透過 Session 隔離可安全進行公開部署
-   - 使用者無法存取彼此的文件
-   - 生產環境建議實作身份驗證
-
-## 🔄 更新專案
+確認 NGC API Key 正確且有存取 `nvcr.io/nim/nvidia/llama-3.2-nv-embedqa-1b-v2` 的權限。
 
 ```bash
-# 拉取最新程式碼
-git pull
-
-# 更新依賴套件
-pip install -r requirements.txt --upgrade
+kubectl logs deployment/embedding-nim
 ```
 
-## 📞 技術支援
+### Cloud Build 失敗
 
-如果遇到問題，請檢查：
-1. Python 版本符合需求
-2. 所有依賴套件正確安裝
-3. API Key 有效
-4. 查看終端機中的錯誤訊息
-5. 檢查 `logs/app.log` 中的詳細日誌
+```bash
+gcloud builds list --project=YOUR_PROJECT_ID --limit=5
+```
+
+---
+
+## 💰 成本估算
+
+| 資源 | 估算月費 | 說明 |
+|------|----------|------|
+| NVIDIA L4 GPU Node | ~$200/月 | 最大成本，停機可省 |
+| PDF Agent Pod (CPU) | ~$15/月 | — |
+| Qdrant Pod (CPU) | ~$8/月 | — |
+| LoadBalancer | ~$18/月 | 固定費用 |
+| GCS 儲存 | < $1/月 | 視 PDF 數量 |
+| Cloud Build | < $1/月 | 免費額度 120 分鐘/日 |
+
+> 💡 使用 `./stop-AI.sh` 停止服務後，GPU Node 會被 Autopilot 自動釋放，**只留 Cluster 管理費**。
+
+---
 
 ## 🌐 專案連結
 
 - **GitHub**：[spike688023/pdf_parser_agent](https://github.com/spike688023/pdf_parser_agent)
-- **複製**：`git clone git@github.com:spike688023/pdf_parser_agent.git`
-
-## 📄 授權
-
-本專案使用的主要開源套件：
-- Google Generative AI SDK
-- Google ADK (Agent Development Kit)
-- Streamlit
-- FAISS
-- PyPDF
-- Sentence-Transformers
+- **Branch**：`feature/nim-gke-migration`
 
 ---
 
-**祝您使用愉快！** 🎉
+**Happy Hacking!** 🚀
 
 *For English documentation, see [README.md](README.md)*

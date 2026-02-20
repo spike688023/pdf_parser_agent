@@ -176,7 +176,7 @@ with st.sidebar:
                             
                         async def process_pdf():
                             return await ingest_pdf_tool(
-                                gcs_uri,
+                                temp_path,
                                 pages=None,
                                 original_filename=uploaded_file.name,
                                 progress_callback=update_progress,
