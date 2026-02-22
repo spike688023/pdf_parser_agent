@@ -8,7 +8,7 @@ flowchart TB
         direction TB
         
         subgraph pod1["Pod 1: PDF Agent"]
-            A["🖥️ Streamlit 前端<br/>RAG 邏輯 / PDF 解析<br/>Port: 8088<br/>🔵 CPU"]
+            A["🖥️ Streamlit 前端<br/>RAG 邏輯 / PDF 解析<br/>Port: 80 (LoadBalancer)<br/>🔵 CPU"]
         end
         
         subgraph pod2["Pod 2: NVIDIA NIM Embedding"]
@@ -31,7 +31,7 @@ flowchart TB
     A -->|"LLM 推理"| D
     A -->|"PDF 上傳 / 下載"| E
     
-    F["👤 使用者"] -->|"kubectl port-forward"| A
+    F["👤 使用者"] -->|"LoadBalancer IP"| A
 
     style GKE fill:#2d2d2d,stroke:#888,color:#fff
     style pod1 fill:#1565C0,stroke:#0D47A1,color:#fff

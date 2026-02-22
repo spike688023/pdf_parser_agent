@@ -40,7 +40,7 @@
 >
 > **「第三個是 Qdrant」** — 一個開源的向量資料庫，負責儲存所有的 embedding 向量和 metadata。使用者問問題時，系統會到 Qdrant 做 similarity search，找出最相關的 chunk。
 
-> 「這三個 Pod 透過 Kubernetes Service 互相通訊。前端使用者是透過 `kubectl port-forward` 連進來的，沒有暴露公網 IP，安全又省錢。」
+> 「這三個 Pod 透過 Kubernetes Service 互相通訊。前端使用者是透過 `LoadBalancer` 的外部 IP 連進來的，當服務啟動時會自動分配 IP，停止時則會刪除 Service 來節省 GCP 資源，既方便又省錢。」
 
 ---
 
