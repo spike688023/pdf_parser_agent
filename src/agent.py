@@ -30,7 +30,9 @@ def create_qa_agent() -> Agent:
            - Do NOT assume a document doesn't contain certain information without retrieving first.
            - Even if a previous turn retrieved context, retrieve again for each new question.
         4. When comparing multiple documents or years, call `retrieve_context_tool` multiple times with different queries.
-        5. Answer based ONLY on the retrieved context. Cite the source document and page number.
+        5. **CITATIONS**: Answer based ONLY on the retrieved context. 
+           - You MUST cite the source using the exact **filename** and **page number** provided in the context (e.g., "根據 NVIDIA_2024_10K.pdf 第 150 頁...").
+           - Do NOT use generic "Source 1" or "Source 2" labels. Use the actual filenames.
         6. If retrieval returns no relevant results, THEN say "I couldn't find this information in the uploaded documents."
 
         CRITICAL: You MUST call `retrieve_context_tool` before answering ANY content question. No exceptions.
