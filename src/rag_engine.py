@@ -372,18 +372,23 @@ def _extract_query_filters(query: str) -> Optional[Dict[str, Any]]:
         model = genai.GenerativeModel('gemini-2.5-flash-lite')
         
         prompt = f"""
-        Analyze the search query and identify if the user is filtering by a specific topic, domain, or document type.
-        Extract relevant keywords that might match document tags (e.g., "Finance", "Report", "NVIDIA", "2024").
-        Return ONLY a JSON object with a "tags" key containing a list of strings. If no specific filter is implied, return generic tags or empty list.
+        Analyze the following search query and identify if the user is filtering by specific criteria:
+        1. Topic or Keyword (e.g., "Revenue", "AI", "Nvidia")
+        2. Year (e.g., "2024", "2025")
+        3. Document Type (e.g., "Report", "10-K", "Contract")
+
+        Extract these as tags that would match document metadata.
+        Return ONLY a JSON object with a "tags" key containing a list of strings.
+        Include years as separate tags if mentioned.
         
         Query: "{query}"
         
         Examples:
-        Query: "Show me financial reports"
-        {{"tags": ["Finance", "Report"]}}
+        Query: "Show me 2024 financial reports"
+        {{"tags": ["2024", "Finance", "Report"]}}
         
-        Query: "What is the revenue of Nvidia?"
-        {{"tags": ["Nvidia", "Revenue", "Finance"]}}
+        Query: "What did Nvidia say about Blackwell in 2025?"
+        {{"tags": ["Nvidia", "Blackwell", "2025"]}}
         
         Query: "Summary of the document"
         {{"tags": []}}
@@ -396,10 +401,14 @@ def _extract_query_filters(query: str) -> Optional[Dict[str, Any]]:
             text = text[7:-3]
         elif text.startswith("```"):
             text = text[3:-3]
+        
+        # Also clean up potential trailing backticks or whitespace
+        text = text.strip().strip('`')
             
         data = json.loads(text)
         if data.get("tags"):
-             return {"tags": data["tags"]}
+             # Clean and lowercase tags for better matching
+             return {"tags": [str(t).strip() for t in data["tags"]]}
         return None
         
     except Exception as e:
@@ -638,13 +647,21 @@ async def tag_document_tool(file_path: str, pages: Optional[List[str]] = None) -
         genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
         model = genai.GenerativeModel('gemini-2.5-flash-lite')
         
-        prompt = f"""
-        Analyze the following document text and generate 3-5 relevant tags.
-        Tags should be concise keywords representing the document's topic, type, or domain.
-        Return ONLY the tags separated by commas, no other text.
-        Example: Finance, Report, 2024, Budget
+        # Include filename as it often has the year
+        filename = os.path.basename(file_path)
         
-        Text:
+        prompt = f"""
+        Analyze the following document (Filename: {filename}) and generate 4-6 specific tags.
+        
+        CRITICAL: You MUST include the primary year of the document (e.g., 2024, 2025) if found.
+        Also include the document type (e.g., 10-K, Annual Report, Invoice, Presentation).
+        
+        Tags should be concise: Topic, Type, Year, Entity.
+        Return ONLY the tags separated by commas.
+        
+        Example: Nvidia, 10-K, 2024, Finance, GPU
+        
+        Text Sample:
         {text_sample}
         """
         
