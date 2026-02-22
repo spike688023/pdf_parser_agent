@@ -152,15 +152,11 @@ with st.sidebar:
                                 tags=tags,
                                 chunk_count=chunk_count
                             )
-                            msg = f"⏭️ 此檔案已處理過：**{uploaded_file.name}**（{chunk_count} chunks）"
-                            if tags:
-                                msg += f"\n\n🏷️ Tags: {tags}"
-                            
-                            # 把成功跳過的訊息加入對話紀錄中，讓使用者明確看到處理結果
-                            st.session_state.messages.append({"role": "assistant", "content": msg})
-                            
+                            msg = f"✅ 已載入既有檔案：{uploaded_file.name}"
+                            # 秀一個成功提示，接著直接用 rerun 更新畫面，讓它出現在下方的「Your Documents」列表中
+                            st.success(msg)
                             load_documents()
-                            st.rerun() # Use rerun instead of stop to clear the uploading state UI
+                            st.rerun()
 
                         # ====== Step 4: 需要 embed → 下載到本機開始處理 ======
                         if gcs_exists:
