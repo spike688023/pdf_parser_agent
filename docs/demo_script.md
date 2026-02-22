@@ -48,15 +48,15 @@
 
 > 「當使用者上傳一份 PDF，系統在背後做了蠻多事情的。讓我一步步說明：」
 
-### Step 1：四層去重與持久化機制
+### Step 1：三層去重與持久化機制
   
 > 「首先，系統會算出這份 PDF 的 **SHA-256 hash**，作為它的唯一識別碼。」
 >
 > 「然後去 **Qdrant** 查有沒有這份檔案的 completion marker — 如果有，代表之前已經處理過了，秒速跳過。」
 >
-> 「如果需要處理，系統會先檢查 **Local PVC 儲存** 檔案是否已存在；若不存在，則將上傳的位元組直接寫入本地磁碟併同步至 **GCS**。」
+> 「如果需要處理，系統會先檢查 **Local PVC Cache** 檔案是否已存在；若不存在，則將上傳的位元組直接寫入本地磁碟。」
 >
-> 「這是一個四層機制：**SHA hash → Qdrant marker → Local PVC Cache → GCS Backup**。有了本地磁碟緩存後，解析時直接讀取 local SSD 檔案，完全省略了從雲端下載的時間，效率極高。」
+> 「這是一個三層機制：**SHA hash → Qdrant marker → Local PVC Cache**。有了本地磁碟緩存後，解析時直接讀取 local SSD 檔案，完全省略了從網路下載的時間，效率極高。」
 
 ### Step 2：PDF 解析 + 並行處理
 
@@ -132,7 +132,7 @@
 > - **Qdrant** — 向量資料庫，支持 hybrid search
 > - **Gemini API** — tag 生成、reranking、最終回答
 > - **Parallel Processing** — 多 worker 並行 PDF 解析
-> - **三層去重** — SHA hash → Qdrant marker → GCS check
+> - **三層去重** — SHA hash → Qdrant marker → Local PVC Cache
 >
 > 「這就是一個完整的 cloud-native RAG 系統。」
 

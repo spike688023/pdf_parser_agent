@@ -8,7 +8,7 @@ flowchart TB
         direction TB
         
         subgraph pod1["Pod 1: PDF Agent"]
-            A["🖥️ Streamlit 前端<br/>RAG 邏輯 / PDF 解析<br/>Port: 80 (LoadBalancer)<br/>🔵 CPU"]
+            A["🖥️ Streamlit 前端<br/>RAG 邏輯 / PDF 解析<br/>Port: 80 (LoadBalancer)<br/>🔵 CPU<br/>💾 Local Disk (1GB PVC)<br/>SQLite + PDF Cache"]
         end
         
         subgraph pod2["Pod 2: NVIDIA NIM Embedding"]
@@ -16,7 +16,7 @@ flowchart TB
         end
         
         subgraph pod3["Pod 3: Qdrant"]
-            C["📦 向量資料庫<br/>Dense + Sparse vectors<br/>Metadata payload<br/>Port: 6333"]
+            C["📦 向量資料庫<br/>Dense + Sparse vectors<br/>Metadata payload<br/>Port: 6333<br/>💾 1GB PVC"]
         end
         
         A -->|"embedding 請求"| B
@@ -25,11 +25,9 @@ flowchart TB
     
     subgraph external["☁️ External Services"]
         D["🤖 Gemini API<br/>Tag 生成 / Rerank / 回答"]
-        E["📁 Google Cloud Storage<br/>PDF 持久儲存"]
     end
     
     A -->|"LLM 推理"| D
-    A -->|"PDF 上傳 / 下載"| E
     
     F["👤 使用者"] -->|"LoadBalancer IP"| A
 
@@ -41,21 +39,8 @@ flowchart TB
     style B fill:#8BC34A,color:#fff
     style C fill:#F06292,color:#fff
     style D fill:#FF9800,color:#fff
-    style E fill:#FF9800,color:#fff
     style F fill:#4CAF50,color:#fff
     style external fill:#424242,stroke:#888,color:#fff
-```
-
-### 3. 三大組件數據流
-
-```mermaid
-graph LR
-    User([使用者]) <--> Agent[PDF Agent<br/>Streamlit]
-    Agent <--> PVC_Disk[("Local Disk (1GB PVC)<br/>SQLite + PDF Cache")]
-    Agent -- "1. Embedding Request" --> NIM["NVIDIA NIM (GPU: L4)<br/>llama-3.2-nv-embedqa-1b-v2"]
-    Agent -- "2. Vector Upsert/Search" --> Qdrant[("Qdrant (Vector DB)<br/>(1GB PVC)")]
-    Agent -- "3. Rerank / Answer" --> Gemini[Gemini 1.5 Flash]
-    Agent -. "Backup Storage" .-> GCS[(Google Cloud Storage)]
 ```
 
 ## 📤 上傳 & 去重流程
@@ -68,23 +53,20 @@ flowchart TD
     CheckExists -- 是 (Qdrant Marker) --> Found[從 Qdrant 恢復 Metadata 到 Session]
     CheckExists -- 否 --> CheckLocal{Local PVC 是否有檔?}
     
-    CheckLocal -- 否 --> SaveLocal[寫入 Local PVC 磁碟 + 同步 GCS]
+    CheckLocal -- 否 --> SaveLocal[寫入 Local PVC 磁碟]
     CheckLocal -- 是 --> Process[直接讀取 Local PVC 磁碟路徑]
     
     SaveLocal --> Process
     
     Process --> ParallelParse[4x Workers 並行解析頁面]
     style A fill:#4CAF50,color:#fff
-    style D fill:#2196F3,color:#fff
-    style G fill:#FF9800,color:#fff
-    style H fill:#9C27B0,color:#fff
 ```
 
 ## 📄 PDF 解析 Pipeline
 
 ```mermaid
 flowchart TD
-    A["📥 從 GCS 下載 PDF<br/>到本機暫存"] --> B["Step 1: 並行 PDF 解析<br/>4 Workers × pdfplumber<br/>逐頁提取文本<br/>🔵 CPU"]
+    A["📥 讀取 Local PVC 磁碟中的 PDF"] --> B["Step 1: 並行 PDF 解析<br/>4 Workers × pdfplumber<br/>逐頁提取文本<br/>🔵 CPU"]
     
     B --> C["Step 2: Chunking 切分<br/>每 chunk ~500 tokens<br/>overlap 50 tokens<br/>附帶 metadata:<br/>頁碼 / 檔名 / document_id<br/>🔵 CPU"]
     

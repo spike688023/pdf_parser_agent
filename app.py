@@ -123,32 +123,21 @@ with st.sidebar:
                     uploaded_file.seek(0)
 
                     try:
-                        from src.gcs_storage import get_gcs_storage
-                        gcs = get_gcs_storage()
                         destination_blob_name = f"uploads/{content_hash}/{uploaded_file.name}"
 
-                        # ====== Step 2: 本地磁碟 & GCS 查重 → 決定要不要上傳 ======
+                        # ====== Step 2: 本地磁碟查重 → 決定要不要上傳 ======
                         local_upload_dir = f"/app/storage/uploads/{content_hash}"
                         import os
                         os.makedirs(local_upload_dir, exist_ok=True)
                         local_file_path = os.path.join(local_upload_dir, uploaded_file.name)
                         
                         local_exists = os.path.exists(local_file_path)
-                        gcs_exists = gcs.file_exists(destination_blob_name)
 
                         # 如果本地沒有，就寫入本地
                         if not local_exists:
                             st.info("💾 Saving to Local Storage...")
                             with open(local_file_path, "wb") as f:
                                 f.write(file_bytes)
-                        
-                        # 如果雲端沒有，就上傳雲端
-                        if not gcs_exists:
-                            st.info("📤 Syncing to Cloud Storage...")
-                            gcs.upload_from_file_object(
-                                file_obj=uploaded_file,
-                                destination_blob_name=destination_blob_name
-                            )
 
                         # ====== Step 3: Qdrant 查重 → 決定要不要 embed ======
                         qdrant_info = st.session_state.session_vector_store.has_document_in_qdrant(content_hash)
@@ -170,13 +159,8 @@ with st.sidebar:
                             load_documents()
                             st.rerun()
 
-                        # ====== Step 4: 需要 embed → 下載到本機開始處理 ======
-                        if gcs_exists:
-                            st.info("📄 GCS 已有檔案，重新 embedding...")
-                        else:
-                            st.info("📄 Parsing PDF...")
-                        temp_path = gcs.download_to_temp(destination_blob_name)
-
+                        # ====== Step 4: 需要 embed → 使用本地 PVC 檔案開始處理 ======
+                        st.info("📄 Parsing PDF...")
                         # Progress bar for the main processing loop
                         progress_bar = st.progress(0, text="Processing: 0%")
                         
@@ -187,7 +171,7 @@ with st.sidebar:
                             
                         async def process_pdf():
                             return await ingest_pdf_tool(
-                                temp_path,
+                                local_file_path, # 改為直接傳入本地路徑
                                 pages=None,
                                 original_filename=uploaded_file.name,
                                 progress_callback=update_progress,
@@ -199,18 +183,18 @@ with st.sidebar:
                             _pdf_elapsed = _time.time() - _pdf_start
                             st.success(f"✅ PDF processed successfully! ({_pdf_elapsed:.1f}s)")
                             
-                            # Clean up temp file
-                            if os.path.exists(temp_path):
-                                os.unlink(temp_path)
+                            # Clean up temp file (已移除 GCS 下載，所以不用清)
+                            # if os.path.exists(temp_path):
+                            #     os.unlink(temp_path)
                             
                             # Reload documents
                             load_documents()
                             st.rerun()
                         except Exception as e:
                             st.error(f"❌ Error processing PDF: {e}")
-                            # Clean up temp file on error
-                            if os.path.exists(temp_path):
-                                os.unlink(temp_path)
+                            # Clean up temp file on error (已移除)
+                            # if os.path.exists(temp_path):
+                            #     os.unlink(temp_path)
                             
                     except Exception as e:
                         st.error(f"❌ Error uploading to GCS: {e}")
