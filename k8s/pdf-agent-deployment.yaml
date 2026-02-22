@@ -69,7 +69,7 @@ kind: Service
 metadata:
   name: pdf-agent-service
 spec:
-  type: ClusterIP  # 免費，用 kubectl port-forward svc/pdf-agent-service 8080:80 存取
+  type: ClusterIP  # 在 Start-AI.sh 啟動時會動態改為 LoadBalancer
   sessionAffinity: ClientIP
   sessionAffinityConfig:
     clientIP:

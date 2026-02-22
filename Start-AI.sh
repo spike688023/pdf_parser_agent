@@ -36,6 +36,9 @@ echo "🛠️ Applying latest configurations (Just in case)..."
 $KUBECTL_CMD apply -f k8s/ -R
 $KUBECTL_CMD apply -f k8s/hpa.yaml  # 確保 HPA 被重新建立 (因為 Stop 時被刪除了)
 
+echo "🌍 Enabling LoadBalancer for External Access..."
+$KUBECTL_CMD patch svc pdf-agent-service -p '{"spec": {"type": "LoadBalancer"}}' --type='merge'
+
 echo "✅ All services startup requested!"
 echo "⏳ It may take 2-5 minutes for GPU nodes to be provisioned by GKE Autopilot."
 echo "👀 Waiting for pdf-agent pod to be Ready..."
@@ -43,16 +46,17 @@ echo "👀 Waiting for pdf-agent pod to be Ready..."
 # 等待 pdf-agent Pod Ready
 $KUBECTL_CMD wait --for=condition=ready pod -l app=pdf-agent --timeout=300s
 
-# 啟動 port-forward（背景執行）
-echo "🔗 Starting port-forward (localhost:8088 → pdf-agent-service:80)..."
-$KUBECTL_CMD port-forward svc/pdf-agent-service 8088:80 &
-PF_PID=$!
+# 等待取得 LoadBalancer External IP
+echo "🔗 Waiting for LoadBalancer External IP..."
+while [ -z "$EXTERNAL_IP" ] || [ "$EXTERNAL_IP" = "<pending>" ]; do
+    EXTERNAL_IP=$($KUBECTL_CMD get svc pdf-agent-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+    if [ -z "$EXTERNAL_IP" ] || [ "$EXTERNAL_IP" = "<pending>" ]; then
+        sleep 2
+    fi
+done
 
-sleep 2
 echo ""
-echo "🌐 App is ready at: http://localhost:8088"
-echo "   port-forward PID: $PF_PID"
-echo "   停止 port-forward: kill $PF_PID"
+echo "🌐 App is ready at: http://$EXTERNAL_IP"
 
 # 自動開瀏覽器（macOS）
-open http://localhost:8088 2>/dev/null || true
+open "http://$EXTERNAL_IP" 2>/dev/null || true
