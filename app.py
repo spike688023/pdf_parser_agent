@@ -157,7 +157,7 @@ with st.sidebar:
                                 msg += f"\n\n🏷️ Tags: {tags}"
                             st.success(msg)
                             load_documents()
-                            st.stop()
+                            st.rerun() # Use rerun instead of stop to clear the uploading state UI
 
                         # ====== Step 4: 需要 embed → 下載到本機開始處理 ======
                         if gcs_exists:
