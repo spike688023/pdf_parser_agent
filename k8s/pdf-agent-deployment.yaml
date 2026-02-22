@@ -43,6 +43,10 @@ spec:
         # 確保 Streamlit 使用 8080 port
         - name: PORT
           value: "8080"
+        - name: STREAMLIT_SERVER_ENABLE_CORS
+          value: "false"
+        - name: STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION
+          value: "false"
         readinessProbe:
           httpGet:
             path: /_stcore/health
@@ -69,7 +73,7 @@ kind: Service
 metadata:
   name: pdf-agent-service
 spec:
-  type: ClusterIP  # 在 Start-AI.sh 啟動時會動態改為 LoadBalancer
+  type: LoadBalancer
   sessionAffinity: ClientIP
   sessionAffinityConfig:
     clientIP:

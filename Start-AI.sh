@@ -36,9 +36,6 @@ echo "🛠️ Applying latest configurations (Just in case)..."
 $KUBECTL_CMD apply -f k8s/ -R
 $KUBECTL_CMD apply -f k8s/hpa.yaml  # 確保 HPA 被重新建立 (因為 Stop 時被刪除了)
 
-echo "🌍 Enabling LoadBalancer for External Access..."
-$KUBECTL_CMD patch svc pdf-agent-service -p '{"spec": {"type": "LoadBalancer"}}' --type='merge'
-
 echo "✅ All services startup requested!"
 echo "⏳ It may take 2-5 minutes for GPU nodes to be provisioned by GKE Autopilot."
 echo "👀 Waiting for pdf-agent pod to be Ready..."
