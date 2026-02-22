@@ -38,4 +38,21 @@ $KUBECTL_CMD apply -f k8s/hpa.yaml  # 確保 HPA 被重新建立 (因為 Stop �
 
 echo "✅ All services startup requested!"
 echo "⏳ It may take 2-5 minutes for GPU nodes to be provisioned by GKE Autopilot."
-echo "👀 You can watch the status with: kubectl get pods -w"
+echo "👀 Waiting for pdf-agent pod to be Ready..."
+
+# 等待 pdf-agent Pod Ready
+$KUBECTL_CMD wait --for=condition=ready pod -l app=pdf-agent --timeout=300s
+
+# 啟動 port-forward（背景執行）
+echo "🔗 Starting port-forward (localhost:8080 → pdf-agent-service:80)..."
+$KUBECTL_CMD port-forward svc/pdf-agent-service 8080:80 &
+PF_PID=$!
+
+sleep 2
+echo ""
+echo "🌐 App is ready at: http://localhost:8080"
+echo "   port-forward PID: $PF_PID"
+echo "   停止 port-forward: kill $PF_PID"
+
+# 自動開瀏覽器（macOS）
+open http://localhost:8080 2>/dev/null || true

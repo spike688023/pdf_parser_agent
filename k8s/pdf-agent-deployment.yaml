@@ -62,7 +62,7 @@ kind: Service
 metadata:
   name: pdf-agent-service
 spec:
-  type: LoadBalancer # 如果在本地測試可用 NodePort，GKE 上建議用 LoadBalancer
+  type: ClusterIP  # 免費，用 kubectl port-forward svc/pdf-agent-service 8080:80 存取
   sessionAffinity: ClientIP
   sessionAffinityConfig:
     clientIP:
