@@ -43,6 +43,13 @@ spec:
         # 確保 Streamlit 使用 8080 port
         - name: PORT
           value: "8080"
+        readinessProbe:
+          httpGet:
+            path: /_stcore/health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 2
+          failureThreshold: 10
         resources:
           requests:
             cpu: "500m"

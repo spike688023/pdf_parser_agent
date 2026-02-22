@@ -44,15 +44,15 @@ echo "👀 Waiting for pdf-agent pod to be Ready..."
 $KUBECTL_CMD wait --for=condition=ready pod -l app=pdf-agent --timeout=300s
 
 # 啟動 port-forward（背景執行）
-echo "🔗 Starting port-forward (localhost:8080 → pdf-agent-service:80)..."
-$KUBECTL_CMD port-forward svc/pdf-agent-service 8080:80 &
+echo "🔗 Starting port-forward (localhost:8088 → pdf-agent-service:80)..."
+$KUBECTL_CMD port-forward svc/pdf-agent-service 8088:80 &
 PF_PID=$!
 
 sleep 2
 echo ""
-echo "🌐 App is ready at: http://localhost:8080"
+echo "🌐 App is ready at: http://localhost:8088"
 echo "   port-forward PID: $PF_PID"
 echo "   停止 port-forward: kill $PF_PID"
 
 # 自動開瀏覽器（macOS）
-open http://localhost:8080 2>/dev/null || true
+open http://localhost:8088 2>/dev/null || true
