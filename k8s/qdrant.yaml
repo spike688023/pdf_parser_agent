@@ -9,6 +9,8 @@ spec:
   selector:
     matchLabels:
       app: qdrant
+  strategy:
+    type: Recreate
   template:
     metadata:
       labels:
@@ -22,7 +24,9 @@ spec:
         ports:
         - containerPort: 6333 # API port
         - containerPort: 6334 # gRPC port
-        # No volume mount for now (data will be lost on pod restart)
+        volumeMounts:
+        - name: qdrant-storage
+          mountPath: /qdrant/storage
         resources:
           requests:
             cpu: "500m"
@@ -30,6 +34,21 @@ spec:
           limits:
             cpu: "500m"
             memory: "512Mi"
+      volumes:
+      - name: qdrant-storage
+        persistentVolumeClaim:
+          claimName: qdrant-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: qdrant-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
 ---
 apiVersion: v1
 kind: Service
