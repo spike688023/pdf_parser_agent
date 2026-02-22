@@ -24,6 +24,12 @@ spec:
         image: nvcr.io/nim/nvidia/llama-3.2-nv-embedqa-1b-v2:latest
         ports:
         - containerPort: 8000
+        readinessProbe:
+          httpGet:
+            path: /v1/models
+            port: 8000
+          initialDelaySeconds: 120  # Give it more time to load models
+          periodSeconds: 10
         env:
         - name: NGC_API_KEY
           valueFrom:

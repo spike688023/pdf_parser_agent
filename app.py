@@ -106,9 +106,36 @@ with st.sidebar:
     st.subheader("Upload New PDF")
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", key="pdf_uploader")
     
-    # Moved file upload logic inside sidebar context but using metrics defined globally
+    # Store button state
+    process_clicked = False
     if uploaded_file:
-        if st.button("Process PDF", type="primary"):
+        process_clicked = st.button("Process PDF", type="primary")
+
+    processing_container = st.container()
+    
+    st.divider()
+    
+    # List all documents FIRST so they are visible during processing
+    if not st.session_state.documents:
+        st.info("Upload your first PDF above to get started!")
+
+    if st.session_state.documents:
+        st.subheader("📄 Your Documents")
+        for doc in st.session_state.documents:
+            with st.expander(f"📄 {doc['document_name']}", expanded=False):
+                st.caption(f"Uploaded: {doc['upload_time'][:19]}")
+                st.caption(f"Chunks: {doc['chunk_count']}")
+                if doc.get('tags'):
+                    st.caption(f"🏷️ Tags: {doc['tags']}")
+                if st.button("🗑️ Delete", key=f"del_{doc['document_id']}"):
+                    update_session_activity(st.session_state.session_id)
+                    st.session_state.session_vector_store.delete_document(doc['document_id'])
+                    load_documents()
+                    st.rerun()
+
+    # Now handle the processing inside the placeholder container
+    if process_clicked:
+        with processing_container:
             with PDF_PROCESS_TIME.time(): # Measure PDF processing time
                 with st.spinner("Processing PDF..."):
                     import time as _time
@@ -197,27 +224,7 @@ with st.sidebar:
                             #     os.unlink(temp_path)
                             
                     except Exception as e:
-                        st.error(f"❌ Error uploading to GCS: {e}")
-    
-    st.divider()
-    
-    # List all documents
-    if not st.session_state.documents:
-        st.info("Upload your first PDF above to get started!")
-
-    if st.session_state.documents:
-        st.subheader("📄 Your Documents")
-        for doc in st.session_state.documents:
-            with st.expander(f"📄 {doc['document_name']}", expanded=False):
-                st.caption(f"Uploaded: {doc['upload_time'][:19]}")
-                st.caption(f"Chunks: {doc['chunk_count']}")
-                if doc.get('tags'):
-                    st.caption(f"🏷️ Tags: {doc['tags']}")
-                if st.button("🗑️ Delete", key=f"del_{doc['document_id']}"):
-                    update_session_activity(st.session_state.session_id)
-                    st.session_state.session_vector_store.delete_document(doc['document_id'])
-                    load_documents()
-                    st.rerun()
+                        st.error(f"❌ Error processing file: {e}")
 
 # Display chat messages from history on app rerun
 for message in st.session_state.messages:
