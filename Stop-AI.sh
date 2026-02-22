@@ -34,5 +34,8 @@ $KUBECTL_CMD delete deployment qdrant --ignore-not-found=true
 echo "🗑️ Deleting PDF Agent Deployment (to force image update on restart)..."
 $KUBECTL_CMD delete deployment pdf-agent --ignore-not-found=true
 
+echo "🔌 Releasing LoadBalancer External IP to save costs..."
+$KUBECTL_CMD patch svc pdf-agent-service -p '{"spec": {"type": "ClusterIP"}}' --type='merge' || true
+
 echo "✅ All services stopped!"
 echo "💰 No active Pods = No Compute Cost (in GKE Autopilot/Autoscaling)."

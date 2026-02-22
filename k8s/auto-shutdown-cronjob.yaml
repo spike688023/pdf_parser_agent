@@ -34,6 +34,9 @@ spec:
               kubectl scale deployment qdrant --replicas=0 || true
               kubectl scale deployment pdf-agent --replicas=0 || true
               
+              echo "🔌 Releasing LoadBalancer External IP to save costs..."
+              kubectl patch svc pdf-agent-service -p '{"spec": {"type": "ClusterIP"}}' --type='merge' || true
+
               echo "✅ AI services scaled down to 0"
               
               # 3. 停止監控服務 (Monitoring Namespace)
@@ -70,6 +73,9 @@ rules:
 - apiGroups: ["autoscaling"]
   resources: ["horizontalpodautoscalers"]
   verbs: ["get", "list", "delete"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "patch", "update"]
 ---
 # ClusterRoleBinding: 把 ClusterRole 綁定到 ServiceAccount
 apiVersion: rbac.authorization.k8s.io/v1
