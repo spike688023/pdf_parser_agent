@@ -152,7 +152,9 @@ def ingest_pages_tool(pages: List[tuple], source: str, tags: str = "", document_
     embeddings_np = _get_nim_embeddings(texts, input_type="passage")
 
     # Store in database
-    add_to_database(chunks, embeddings_np)
+    db_result = add_to_database(chunks, embeddings_np)
+    if "Error" in db_result or "Failed" in db_result:
+        raise RuntimeError(f"Database insertion failed: {db_result}")
     return len(chunks)
 
 def ingest_text_tool(text: str, source: str) -> str:

@@ -261,26 +261,33 @@ class VectorStore:
                 
                 print(f"Upserting {len(points)} points in {total_batches} batches to {self.collection_name}...", flush=True)
                 
+                successful_points = 0
+                import time
                 for i in range(0, len(points), batch_size):
                     batch = points[i:i + batch_size]
-                    try:
-                        self.qdrant_client.upsert(
-                            collection_name=self.collection_name,
-                            points=batch
-                        )
-                        print(f"  - Batch {i//batch_size + 1}/{total_batches} upserted successfully.", flush=True)
-                    except Exception as batch_error:
-                        print(f"  ⚠️ Error upserting batch {i//batch_size + 1}: {batch_error}", flush=True)
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        try:
+                            self.qdrant_client.upsert(
+                                collection_name=self.collection_name,
+                                points=batch
+                            )
+                            successful_points += len(batch)
+                            print(f"  - Batch {i//batch_size + 1}/{total_batches} upserted successfully.", flush=True)
+                            break # Success, break retry loop
+                        except Exception as batch_error:
+                            print(f"  ⚠️ Error upserting batch {i//batch_size + 1} (Attempt {attempt+1}/{max_retries}): {batch_error}", flush=True)
+                            if attempt < max_retries - 1:
+                                time.sleep(2 ** attempt) # Exponential backoff: 1s, 2s
+                            else:
+                                raise ValueError(f"Batch upsert failed after {max_retries} attempts: {batch_error}")
                         
                 print(f"Finished upserting {len(points)} points to Qdrant.", flush=True)
             except Exception as e:
                 print(f"⚠️ Failed to add to Qdrant: {e}", flush=True)
                 import traceback
                 traceback.print_exc()
-                sys.stdout.flush()
-                print(f"⚠️ Failed to add to Qdrant: {e}")
-                import traceback
-                traceback.print_exc()
+                raise RuntimeError(f"Qdrant storage failed: {e}")
 
         # Always add to local FAISS as backup/fallback
         self.index.add(embeddings.astype('float32'))
