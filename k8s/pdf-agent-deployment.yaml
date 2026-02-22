@@ -7,6 +7,8 @@ spec:
   selector:
     matchLabels:
       app: pdf-agent
+  strategy:
+    type: Recreate
   template:
     metadata:
       labels:
@@ -41,6 +43,8 @@ spec:
         - name: GCS_BUCKET_NAME
           value: "my-pdf-files__spike688023"
         # 確保 Streamlit 使用 8080 port
+        - name: STORAGE_DIR
+          value: "/app/storage"
         - name: PORT
           value: "8080"
         - name: STREAMLIT_SERVER_ENABLE_CORS
@@ -66,7 +70,19 @@ spec:
           mountPath: /app/storage
       volumes:
       - name: storage-volume
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: pdf-agent-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pdf-agent-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
 ---
 apiVersion: v1
 kind: Service

@@ -46,23 +46,34 @@ flowchart TB
     style external fill:#424242,stroke:#888,color:#fff
 ```
 
+### 3. 三大組件數據流
+
+```mermaid
+graph LR
+    User([使用者]) <--> Agent[PDF Agent<br/>Streamlit]
+    Agent <--> PVC_Disk[("Local Disk (1GB PVC)<br/>SQLite + PDF Cache")]
+    Agent -- "1. Embedding Request" --> NIM["NVIDIA NIM (GPU: L4)<br/>llama-3.2-nv-embedqa-1b-v2"]
+    Agent -- "2. Vector Upsert/Search" --> Qdrant[("Qdrant (Vector DB)<br/>(1GB PVC)")]
+    Agent -- "3. Rerank / Answer" --> Gemini[Gemini 1.5 Flash]
+    Agent -. "Backup Storage" .-> GCS[(Google Cloud Storage)]
+```
+
 ## 📤 上傳 & 去重流程
 
 ```mermaid
 flowchart TD
     A[👤 使用者上傳 PDF] --> B["Step 1: 計算 SHA-256 Hash<br/>(CPU)"]
     B --> C{"Step 2: Qdrant<br/>有 completion marker？"}
+    CheckExists{檔案是否已處理過?}
+    CheckExists -- 是 (Qdrant Marker) --> Found[從 Qdrant 恢復 Metadata 到 Session]
+    CheckExists -- 否 --> CheckLocal{Local PVC 是否有檔?}
     
-    C -->|✅ 有| D["⏭️ 秒回跳過<br/>恢復 metadata 到 session"]
-    D --> E[Sidebar 顯示文件]
+    CheckLocal -- 否 --> SaveLocal[寫入 Local PVC 磁碟 + 同步 GCS]
+    CheckLocal -- 是 --> Process[直接讀取 Local PVC 磁碟路徑]
     
-    C -->|❌ 沒有| F{"Step 3: GCS<br/>檔案已存在？"}
+    SaveLocal --> Process
     
-    F -->|❌ 不存在| G[📤 上傳 PDF 到 GCS]
-    G --> H[開始 PDF 解析]
-    
-    F -->|✅ 已存在| H
-
+    Process --> ParallelParse[4x Workers 並行解析頁面]
     style A fill:#4CAF50,color:#fff
     style D fill:#2196F3,color:#fff
     style G fill:#FF9800,color:#fff
@@ -149,8 +160,8 @@ gantt
 
     SHA Hash 計算           :a1, 00, 1s
     Qdrant Marker 查詢      :a2, after a1, 1s
-    GCS 存在性檢查          :b1, after a2, 2s
-    GCS 下載 PDF            :b2, after b1, 4s
+    Local PVC 緩存檢查      :b1, after a2, 1s
+    本地磁碟讀取 (快!)       :b2, after b1, 1s
     並行 PDF 解析 4 Workers  :c1, after b2, 82s
     Tag 生成 Gemini          :d1, after c1, 10s
     Dense Embedding NIM L4   :e1, after d1, 25s
@@ -176,8 +187,8 @@ flowchart LR
 |------|------|------|------|
 | SHA Hash 計算 | 🔵 CPU | ~0.1s | 本機 Python hashlib |
 | Qdrant Marker 查詢 | 🔵 CPU | ~0.01s | HTTP → Qdrant Pod |
-| GCS 存在性檢查 | ☁️ API | ~2s | GCS API call |
-| GCS 下載 PDF | ☁️ API | ~4s | 50MB PDF |
+| Local PVC 緩存檢查 | 🔵 CPU | ~0.1s | 檢查 /app/storage/uploads |
+| 本地磁碟讀取 | 🟢 **SSD** | ~0.5s | 直接讀取本地 PVC 磁碟 (1GB) |
 | 並行 PDF 解析 | 🔵 CPU | ~82s | 4 processes（ProcessPoolExecutor）× pdfplumber |
 | Tag 生成 | ☁️ Gemini API | ~5-15s | 前 5 頁送 Gemini |
 | Dense Embedding | 🟢 **GPU (L4)** | ~20-30s | NVIDIA NIM, 2048 維 |

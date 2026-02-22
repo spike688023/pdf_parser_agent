@@ -34,11 +34,11 @@
 └─────────────────────────────────────────────────────────┘
 ```
 
-> **「第一個 Pod 是 PDF Agent」** — 負責前端介面跟整體的 RAG 邏輯，包含 PDF 解析、chunk 切分、呼叫 embedding API、存入向量資料庫、以及最後把搜尋結果送給 Gemini 生成答案。這個 Pod 跑的是 Streamlit。
+> **「第一個 Pod 是 PDF Agent」** — 負責前端介面跟整體的 RAG 邏輯。**它掛載了 1GB 的持久化磁碟 (PVC)**，用來儲存 SQLite 資料庫 (`sessions.db`) 以及上傳的 PDF 檔案。這意味著即便 Pod 重啟，文件清單和處理過的檔案路徑也會保留在磁碟中，實現了真正的系統狀態持久化。
 >
 > **「第二個是 NVIDIA NIM Embedding」** — 這是 NVIDIA 提供的推論容器，跑的模型是 `llama-3.2-nv-embedqa-1b-v2`，專門做文本轉向量的工作。它跑在 **NVIDIA L4 GPU** 上，embedding 速度比 CPU 快非常多。之所以把 embedding 獨立成一個 Pod，是因為 GPU 資源昂貴，獨立部署可以做到**用完就關、不用不花錢**。
 >
-> **「第三個是 Qdrant」** — 一個開源的向量資料庫，負責儲存所有的 embedding 向量和 metadata。使用者問問題時，系統會到 Qdrant 做 similarity search，找出最相關的 chunk。
+> **「第三個是 Qdrant」** — 一個開源的向量資料庫，**同樣掛載了 1GB 的 PVC** 確保向量資料不遺失。它負責儲存所有的 embedding 向量和 metadata。使用者問問題時，系統會到 Qdrant 做 similarity search，找出最相關的 chunk。
 
 > 「這三個 Pod 透過 Kubernetes Service 互相通訊。前端使用者是透過 `LoadBalancer` 的外部 IP 連進來的，當服務啟動時會自動分配 IP，停止時則會刪除 Service 來節省 GCP 資源，既方便又省錢。」
 
@@ -48,15 +48,15 @@
 
 > 「當使用者上傳一份 PDF，系統在背後做了蠻多事情的。讓我一步步說明：」
 
-### Step 1：去重檢查
-
+### Step 1：四層去重與持久化機制
+  
 > 「首先，系統會算出這份 PDF 的 **SHA-256 hash**，作為它的唯一識別碼。」
 >
-> 「然後去 **Qdrant** 查有沒有這份檔案的 completion marker — 如果有，代表之前已經處理過了，直接跳過，不用重複花時間。」
+> 「然後去 **Qdrant** 查有沒有這份檔案的 completion marker — 如果有，代表之前已經處理過了，秒速跳過。」
 >
-> 「如果 Qdrant 沒找到，再去 **GCS（Google Cloud Storage）** 查檔案存不存在。不存在的話才上傳。」
+> 「如果需要處理，系統會先檢查 **Local PVC 儲存** 檔案是否已存在；若不存在，則將上傳的位元組直接寫入本地磁碟併同步至 **GCS**。」
 >
-> 「就是一個三層去重機制：**SHA hash → Qdrant marker → GCS check**，確保同一份 PDF 不會被重複處理。」
+> 「這是一個四層機制：**SHA hash → Qdrant marker → Local PVC Cache → GCS Backup**。有了本地磁碟緩存後，解析時直接讀取 local SSD 檔案，完全省略了從雲端下載的時間，效率極高。」
 
 ### Step 2：PDF 解析 + 並行處理
 

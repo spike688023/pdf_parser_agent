@@ -127,12 +127,24 @@ with st.sidebar:
                         gcs = get_gcs_storage()
                         destination_blob_name = f"uploads/{content_hash}/{uploaded_file.name}"
 
-                        # ====== Step 2: GCS 查重 → 決定要不要上傳 ======
+                        # ====== Step 2: 本地磁碟 & GCS 查重 → 決定要不要上傳 ======
+                        local_upload_dir = f"/app/storage/uploads/{content_hash}"
+                        import os
+                        os.makedirs(local_upload_dir, exist_ok=True)
+                        local_file_path = os.path.join(local_upload_dir, uploaded_file.name)
+                        
+                        local_exists = os.path.exists(local_file_path)
                         gcs_exists = gcs.file_exists(destination_blob_name)
 
+                        # 如果本地沒有，就寫入本地
+                        if not local_exists:
+                            st.info("💾 Saving to Local Storage...")
+                            with open(local_file_path, "wb") as f:
+                                f.write(file_bytes)
+                        
+                        # 如果雲端沒有，就上傳雲端
                         if not gcs_exists:
-                            # 新檔案 → 上傳到 GCS
-                            st.info("📤 Uploading to Cloud Storage...")
+                            st.info("📤 Syncing to Cloud Storage...")
                             gcs.upload_from_file_object(
                                 file_obj=uploaded_file,
                                 destination_blob_name=destination_blob_name

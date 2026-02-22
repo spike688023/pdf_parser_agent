@@ -200,20 +200,17 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
     try:
         # Handle GCS URIs - download to temp location
         vector_store = get_session_vector_store()
-        if vector_store and vector_store.is_gcs_uri(file_path):
-            print(f"Downloading from GCS: {file_path}")
-            local_path = vector_store.get_local_path(file_path)
-            temp_file = local_path  # Mark for cleanup
-        # Handle local path resolution
-        elif not os.path.exists(file_path):
-            upload_path = os.path.join("uploads", file_path)
-            if os.path.exists(upload_path):
-                local_path = upload_path
-        
         # Determine document identification
         import hashlib
         document_id = content_hash if content_hash else hashlib.md5(file_path.encode()).hexdigest()[:16]
         document_name = original_filename if original_filename else os.path.basename(file_path)
+
+        # Handle local persistent storage first (PVC path)
+        local_pvc_path = f"/app/storage/uploads/{document_id}/{document_name}"
+        
+        if os.path.exists(local_pvc_path):
+            print(f"✅ Found local persistent file: {local_pvc_path}")
+            local_path = local_pvc_path
         
         # === Dedup check: query Qdrant directly (survives pod restarts) ===
         vector_store = get_session_vector_store()
@@ -255,7 +252,7 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
 
             # Ingest all at once (since we already have them in memory)
             print(f"Ingesting pre-parsed text from: {file_path}")
-            total_chunks_processed = ingest_pages_tool(pages, source=file_path, tags=tags, document_id=document_id)
+            total_chunks_processed = ingest_pages_tool(pages, source=document_name, tags=tags, document_id=document_id)
 
         else:
             # Phase 1: Parse PDF in parallel (multi-process)
@@ -307,7 +304,7 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
 
                 # Submit batch to thread pool
                 pending_future = loop.run_in_executor(
-                    executor, ingest_pages_tool, batch, file_path, tags, document_id
+                    executor, ingest_pages_tool, batch, document_name, tags, document_id
                 )
 
             # Wait for last batch
@@ -335,7 +332,7 @@ async def ingest_pdf_tool(file_path: str, pages: Optional[List[str]] = None, ori
                 chunk_count=total_chunks_processed
             )
         
-        return f"Successfully ingested PDF: {file_path}. Total chunks: {total_chunks_processed}. Tags: {tags}"
+        return f"Successfully ingested PDF: {document_name}. Total chunks: {total_chunks_processed}. Tags: {tags}"
 
     except Exception as e:
         import traceback
@@ -456,7 +453,7 @@ def retrieve_context_tool(query: str) -> str:
         for i, chunk in enumerate(results):
             page_num = chunk.get('page_number', 'Unknown')
             doc_name = chunk.get('document_name', 'Unknown')
-            context_str += f"[Source {i+1} - {doc_name}, Page {page_num}]:\n{chunk['text']}\n\n"
+            context_str += f"[文件: {doc_name}, 頁碼: {page_num}]:\n{chunk['text']}\n\n"
         return context_str
             
     except Exception as e:
