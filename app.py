@@ -155,7 +155,10 @@ with st.sidebar:
                             msg = f"⏭️ 此檔案已處理過：**{uploaded_file.name}**（{chunk_count} chunks）"
                             if tags:
                                 msg += f"\n\n🏷️ Tags: {tags}"
-                            st.success(msg)
+                            
+                            # 把成功跳過的訊息加入對話紀錄中，讓使用者明確看到處理結果
+                            st.session_state.messages.append({"role": "assistant", "content": msg})
+                            
                             load_documents()
                             st.rerun() # Use rerun instead of stop to clear the uploading state UI
 
